@@ -1,19 +1,17 @@
-# Tesla Fleet Card
+# Sexy Home Assistant Tesla Card
 
-<img src="https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/docs/spaceship-header.png" alt="A badly drawn car that came out as a spaceship" width="900">
+<img src="https://raw.githubusercontent.com/borgqueenx/sexy-home-assistant-tesla-card/main/docs/spaceship-header.png" alt="A badly drawn car that came out as a spaceship" width="900">
 
-**A Tesla-app-style card for your Home Assistant dashboard.** One card shows your
+**A personal fork of [MrNickIE/tesla-fleet-homeassistant](https://github.com/MrNickIE/tesla-fleet-homeassistant), customized as a Tesla-app-style Home Assistant dashboard card.** One card shows your
 whole fleet - battery, range, charging, climate, locks, location - looking and
 behaving like the official Tesla app, and switching between cars in one click.
 
-Works with **both** Tesla integrations, automatically:
-[tesla_custom](https://github.com/alandtse/tesla) (HACS) **and** the official
-**tesla_fleet** integration.
+Works with **all** Tesla integrations, automatically:
+[tesla_custom](https://github.com/alandtse/tesla) (HACS), the official
+**tesla_fleet** integration, **and** [Teslemetry](https://teslemetry.com/).
 
-> ⚡ **Fully vibecoded.** Not a single line of this was typed by a human.
-> It was built conversationally with Claude (Anthropic), iterating against
-> screenshots and screen recordings of the real Tesla app until the two were
-> hard to tell apart. Bugs are the AI's fault; the good ideas were Nick's. 🙂
+> ⚡ The upstream card and this fork were built conversationally with AI, using screenshots and screen recordings of the Tesla app as references.
+> The original author is credited below; this fork adds the layout, card behavior, and image assets used in this Home Assistant setup.
 
 | Home | Charging | Controls | Climate |
 | --- | --- | --- | --- |
@@ -21,22 +19,41 @@ Works with **both** Tesla integrations, automatically:
 
 ---
 
-## Install
+## Install with HACS
 
-**Via HACS (recommended):**
+This is a custom HACS Dashboard repository. HACS must already be installed in Home Assistant.
 
-1. HACS → three-dots menu (top right) → **Custom repositories**.
-2. Paste this repository's URL, choose category **Dashboard**, click **Add**.
-3. Find **Tesla Fleet Card** in HACS and click **Download**.
-4. Hard-refresh your browser (Ctrl+F5 / Cmd+Shift+R). HACS registers the
-   dashboard resource automatically; if the card still says
-   "Custom element doesn't exist", check Settings → Dashboards → three-dots →
-   **Resources** for `/hacsfiles/tesla-fleet-homeassistant/tesla-fleet-card.js`
-   (type *module*) and add it if missing.
+1. Open HACS and select the three-dot menu.
+2. Choose Custom repositories.
+3. Add https://github.com/borgqueenx/sexy-home-assistant-tesla-card and select Dashboard as the category.
+4. Add the repository, open Sexy Home Assistant Tesla Card in HACS, and download it.
+5. Refresh the Home Assistant dashboard in your browser or Companion app.
 
-**Manual install:** copy `tesla-fleet-card.js` to `/config/www/`, add a
-dashboard resource `/local/tesla-fleet-card.js` (type *module*), and bump a
-`?v=` query string on that URL every time you update the file.
+HACS installs the card and its bundled image packs together. The files are stored under
+/config/www/community/sexy-home-assistant-tesla-card/ and served at
+/hacsfiles/sexy-home-assistant-tesla-card/. The card resource is normally registered
+automatically. If you use YAML-managed Lovelace resources, add this resource manually:
+
+~~~yaml
+url: /hacsfiles/sexy-home-assistant-tesla-card/sexy-home-assistant-tesla-card.js
+type: module
+~~~
+
+The bundled images are under /hacsfiles/sexy-home-assistant-tesla-card/images/.
+For a Model Y in white, the pack folder is images/models/y/white/app/. The images
+option should point to that specific app/ folder, containing files such as
+side.jpg and climate.jpg. If images is omitted, the card searches for the matching
+bundled pack automatically.
+
+### Manual installation
+
+Copy the contents of this repository's dist/ folder into a folder such as
+/config/www/sexy-home-assistant-tesla-card/. Add the resource
+/local/sexy-home-assistant-tesla-card/sexy-home-assistant-tesla-card.js with type
+module. The images can then be referenced under
+/local/sexy-home-assistant-tesla-card/images/. After replacing the JavaScript
+file, refresh the browser; if it is cached, add or change a ?v= query value on
+the resource URL.
 
 ## Quick start
 
@@ -61,7 +78,153 @@ cars:
     model: Model Y
     paint: red
     prefix: ""
+    car_offset_x: -20  # shift the car and its effects 20px left
+    name_stats_gap: 8  # add 8px between the name and status/battery
+    lux_entity: sensor.luna_lupa_lux  # Home Assistant illuminance entity
+    lights_lux_below: 50  # show headlight effects under 50 lux while driving
+    lights:  # positions in side-photo overlay coordinates (233 × 108)
+      - [84, 74]
+      - [14, 61]
+    light_angle: 28  # degrees down from forward
+    light_beam_length: 82
+    light_beam_width: 16  # half-width
+    light_source_size: 7
+    light_source_thickness: 3.5
 ```
+
+## Example: Luna Lupa
+
+This example uses the white Model Y image pack shipped with the HACS installation.
+The images value points to the pack's app/ directory; use /local/my-tesla-images/
+instead if you keep your own image set there. You can also remove images entirely
+and let the card find the matching bundled pack.
+
+~~~yaml
+type: custom:tesla-fleet-card
+cars:
+  - name: Luna Lupa
+    model: Model Y
+    paint: white
+    prefix: luna_lupa
+    steering: left
+    images: /hacsfiles/sexy-home-assistant-tesla-card/images/models/y/white/app/
+    force_drive_anim: false
+    force_frunk_open: false
+    force_trunk_open: false
+    force_plugged: false
+    lux_entity: sensor.weather_station_solar_lux
+    lights_lux_below: 100
+    cable_thickness: 0.4
+    climate_hide_model: true
+    climate_controls_position: bottom
+    climate_back_x: 115
+    climate_back_y: 78
+    climate_back_size: 42
+    climate_car_left: 68
+    climate_car_top: -29
+    climate_car_height: 130
+    climate_controls_gap: 0
+    climate_temp_gap: 0
+    climate_temps_y: 0
+    climate_controls_y: 0
+    climate_modes_y: -70
+    climate_cop_y: -30
+    cable_points:
+      - [43, 109]
+      - [45, 108]
+      - [81, 100]
+      - [114, 96]
+      - [120, 92]
+      - [131, 60]
+      - [139, 54]
+      - [142, 57]
+    light_angle: 36
+    light_beam_length: 82
+    light_beam_width: 26
+    light_source_size: 77
+    light_source_thickness: 1.5
+    daylight_points:
+      - [[57, 76.3], [63.5, 76.5], [71, 76]]
+      - [[13.5, 61], [15, 65]]
+    daylight_thickness: 1.1
+    daylight_intensity: 0.9
+    light_spot_width: 2.9
+    light_spot_height: 2.5
+    light_spot_intensity: 1.82
+    light_star_size: 1.5
+    light_star_intensity: 0.3
+    lights:
+      - [81, 74.9]
+      - [14, 58]
+    rest_car_margin: -75px -20px 0px auto
+    rest_car_width: 405px
+    car_offset_x: -25
+    name_stats_gap: 8
+    climate_icon_width: 32
+    climate_icon_height: 24
+    climate_squish_fix: 1.2
+    climate_icon_scale: 1
+    climate_anchors:
+      wheel: [124, 209]
+      fl: [127, 260]
+      fr: [235, 260]
+      rl: [123, 335]
+      rc: [176, 335]
+      rr: [229, 335]
+    rest_anchors:
+      frunk: [42, 19, 42, 9]
+      trunk: [193, 60, 193, 8]
+      lock: [60, 52, 60, 92]
+      charger: [145, 55, 170, 110]
+    rest_anchors_unplugged:
+      frunk: [54, 59, 20, 40]
+      trunk: [209, 10, 215, -7]
+      lock: [144, 62, 185, 93]
+      charger: [215, 20, 230, 40]
+    wheels:
+      lift: 1
+      front: [107.2, 86, 17, 12, 127]
+      rear: [206.5, 55, 0.85, 12, 19]
+    road:
+      angle: -19
+      cycle: 0.55
+      lines:
+        - [101, 2.5]
+        - [45, 1.8]
+      clip: >-
+        <rect x="-25" y="0" width="37" height="108"/><rect x="210" y="0"
+        width="40" height="108"/>
+~~~
+
+### Reading and tuning this example
+
+| YAML fields | What they control |
+| --- | --- |
+| name, model, paint | Card label and image selection. This config selects the white Model Y pack. |
+| prefix, steering | Entity-name prefix and steering-wheel side. The card auto-detects supported Tesla integrations and normalizes a trailing underscore in a prefix. |
+| images | Base URL of this car's pack folder, which must contain its image files. HACS installs its pack under the repository's HACS image path. The original personal path /local/my-tesla-images/ is also valid when that folder contains the pack images. |
+| force_drive_anim, force_frunk_open, force_trunk_open, force_plugged | Visual preview switches. Keep them false for live vehicle state; they help arrange artwork and do not operate the car. |
+| lux_entity, lights_lux_below | Illuminance sensor and threshold for the driving headlight effect. |
+| lights, light_angle, light_beam_length, light_beam_width, light_source_size, light_source_thickness | Headlight positions and beam/glow dimensions, measured in the side-image overlay's 233 × 108 coordinate space. Beam width is a half-width. |
+| daylight_points, daylight_thickness, daylight_intensity | Optional headlamp LED paths, their stroke width, and brightness. Each list in daylight_points is a separate line traced through the supplied coordinate points. |
+| light_spot_*, light_star_* | Headlight spot and star-glint size and intensity. Large values are clamped to keep the effect within the image. |
+| cable_points, cable_thickness | Charging-cable curve points and animated current-line thickness. Points use the side-image overlay coordinates; cable_thickness is a visual tuning value. |
+| climate_hide_model, climate_controls_position | Show the AC label in the climate header and place the Power/temperature/Vent row at the card bottom. Bottom moves only that controls row; Defrost, Camp, and Pet remain in their own block. |
+| climate_back_x, climate_back_y, climate_back_size | Back-button x/y position from the climate card's top-left and its diameter, in pixels. |
+| climate_car_left, climate_car_top, climate_car_height | Climate photo placement and scale. These are percentages of the card/image layout; tune them for your card width and image framing. |
+| climate_controls_gap, climate_temp_gap | Horizontal gap between climate controls and gap around the target temperature and its arrows, in pixels. |
+| climate_temps_y, climate_controls_y, climate_modes_y, climate_cop_y | Vertical offsets in pixels for the temperature block, Power/temperature/Vent controls, Defrost/Camp/Pet block, and Cabin Overheat Protection block. Positive moves down; negative moves up. |
+| climate_anchors | Tap positions for steering wheel and seat climate controls in the climate image. Use calibrate: true to measure custom images. |
+| rest_car_margin, rest_car_width, car_offset_x | Main-view car placement. The margin and width accept CSS values; car_offset_x shifts the car and overlays horizontally in pixels. |
+| name_stats_gap | Space between the car name and status/battery lines, in pixels. |
+| climate_icon_width, climate_icon_height, climate_icon_scale, climate_squish_fix | Climate-control icon sizing and shape correction for the selected screen/device. |
+| rest_anchors, rest_anchors_unplugged | Frunk, trunk, lock, and charger anchor positions in the side-image overlay. Each four-number entry is [image_x, image_y, label_x, label_y]; the second map is used while unplugged. |
+| wheels, road | Wheel rotation geometry and road-strip angle, cycle, line coordinates, and optional SVG clipping. Leave these alone unless calibrating a different image pack. |
+
+For coordinate-based options, start from the supplied values and change one group at
+a time. Climate offsets are independent vertical nudges in pixels. The climate
+controls position setting changes the control row's layout, while the offset
+only adjusts its vertical placement.
 
 ## What you get
 
@@ -83,8 +246,7 @@ cars:
   header, amps stepper, Stop Charging / Unlock Charge Port as applicable.
 - **Action row** - Flash, Honk, Port, Start, Vent (destructive ones need a
   second tap).
-- **No images needed** - everything above works out of the box with built-in
-  drawn artwork in your paint colour. Real photos make it beautiful; see below.
+- **Image packs included** - this fork ships supported Model Y and Model 3 packs, including the white Model Y artwork used in the example. The card falls back to drawn artwork for model/paint combinations without a pack.
 
 ## Images
 
@@ -99,15 +261,14 @@ of the match; see [Body generations](#body-generations) below.
    the layout `models/<3|y>/<paint>/app/`. Drop packs here once; the card
    finds them from each car's Model + Paint with zero config, and HACS
    updates never touch this folder.
-4. **The packs published in this repository** - fetched automatically over
-   GitHub raw for your car's Model + Paint. Zero config, and pack updates
-   arrive on their own without a card update.
-5. Nothing found → built-in drawn artwork.
+4. **The image packs installed by HACS** - the card checks the HACS-served image folder for a matching models/generation/paint/app pack. HACS installs dist/ contents together, so the images update with the card.
+5. **The fork's GitHub image packs** - a raw GitHub fallback for supported Model + Paint combinations when the HACS image path is not available.
+6. Nothing found → built-in drawn artwork.
 
 Pack photos are treated as complete: the card draws no cable overlay on
 them - a charging photo's own cable shows the state.
 
-A pack is seven JPEGs with these names and sizes:
+The standard pack uses these JPEG names and sizes. This repository also includes PNG equivalents where available, alternate climate frames, and open frunk/trunk combinations for the white Model Y. Keep the whole app/ folder together so those states can load.
 
 | File | Size (px) | What it shows |
 | --- | --- | --- |
@@ -204,12 +365,31 @@ Per car:
 | --- | --- |
 | `name`, `model`, `paint` | As in the editor. `paint` picks the image-pack folder, and colours the car's dot in the switcher. |
 | `prefix` | Entity prefix. |
-| `integration` | `auto` (default) / `tesla_custom` / `tesla_fleet`. |
+| `integration` | `auto` (default) / `tesla_custom` / `tesla_fleet` / `teslemetry`. |
 | `entities:` | Per-entity overrides, e.g. `energy_added: sensor.modely_energy_added`. |
 | `images` | Pack base folder or URL for this car. |
+| `steering` | `left` (default) or `right`. Switches the steering wheel icon and heater tap anchor to the correct side. |
 | `image`, `image_top_plugged`, `image_top_charging` | Top-down photos. |
 | `image_side`, `image_side_plugged`, `image_charging` | Resting-view photos. |
-| `image_climate` | Interior photo. |
+| `force_frunk_open`, `force_trunk_open` | Visual-only preview of the open-panel image; set both to `true` to preview both. These previews cannot send cover commands. |
+| `force_plugged` | Visual-only plugged-in preview using your plugged photo/cable. Charging animation still follows the real charging sensor; charge controls are disabled while preview is on. |
+| `image_climate` | Interior photo override. If omitted, the card uses `climate3.jpg` from the configured image folder when present, then falls back to `climate.jpg`. `climate3.jpg` is the optional portrait image used by the climate drive-in animation and menu. |
+| `climate_car_left`, `climate_car_top`, `climate_car_height` | Climate-mode car position and size. `left` is the horizontal center in percent (default `70`); `top` is percent from the top (default `1`); `height` is percent of the climate image box (default `120`). Example: `climate_car_left: 62`, `climate_car_top: -24`, `climate_car_height: 150`. The plugged-in cable follows this image position and extends to the card bottom. |
+| `climate_back_size`, `climate_back_x`, `climate_back_y` | Climate-mode back-button size in pixels (default `28`) and optional x/y position from the climate card's left/top edges. Coordinates accept pixels or percentages; numeric values are pixels. If either coordinate is omitted, that axis keeps its automatic placement. Legacy `climate_back_left` / `climate_back_top` are also accepted. |
+| `climate_hide_model` | Set to `true` to show `| AC` in the climate menu instead of the configured model name. The label fades with the climate menu. |
+| `climate_controls_gap` | Horizontal spacing in pixels between Power, the temperature group, and Vent. Default `6`; negative values bring the icons closer or let them overlap slightly (accepted range `-64` to `64`). |
+| `climate_temp_gap` | Spacing in pixels between the temperature number and its adjustment arrows. Default `4`; negative values pull the arrows closer (accepted range `-32` to `32`). |
+| `climate_controls_position` | Set to `bottom` to center the Power/temperature/Vent row along the card bottom. Defrost, Camp, and Pet keep their existing left-side positions. Defaults to `left`, which keeps the current layout. |
+| Climate menu temperatures and controls | Interior/exterior temperatures plus Defrost, Camp, and Pet buttons use the free space left of the image. Power, target temperature, and Vent stay together on one row; `climate_controls_position: bottom` moves only that row to the card bottom. |
+| Climate menu transition | Entering climate animates the side-view car away, then brings the portrait climate image up from the bottom. The card keeps the normal main-view height, and the photo is clipped by the card viewport. |
+| `climate_transition` | Optional per-car transition timings in seconds. `to_climate` and `to_main` each accept `drive_away` and `drive_in`; defaults are `0.5625` and `0.72`. Example: `climate_transition: { to_climate: { drive_away: 0.6, drive_in: 0.8 }, to_main: { drive_away: 0.7, drive_in: 0.7 } }`. Values are clamped to 0.08–5 seconds. |
+| `car_offset_x` | Horizontal car-area offset in pixels, including overlays and animations. Negative moves left; positive moves right. |
+| `name_stats_gap` | Extra spacing in pixels between the name and status/battery lines when they remain below the name. Positive moves the lines down; negative moves them up. Default `0` keeps the current layout. |
+| `lights`, `light_leds` | Headlight positions and LED strips in the side-photo overlay coordinates (`233 × 108`). A light entry can be `[x, y]`; optional trailing values override angle, beam length, beam half-width, source width and source thickness. |
+| `light_angle`, `light_beam_length`, `light_beam_width` | Per-car headlight defaults. Angle is degrees down from forward (the car faces left); length and width are overlay units. Defaults: `28`, `82`, `16`. |
+| `light_source_size`, `light_source_thickness` | Headlamp glow width and thickness in overlay units. Defaults: `7` and `3.5`. |
+| `wheels` | Optional measured wheel geometry for custom photos. A white Model Y uses the matching built-in geometry automatically, even with a custom `images` path. |
+| `lux_entity`, `lights_lux_below` | Optional Home Assistant illuminance entity and threshold in lux. When configured, light effects show only while driving (or `force_drive_anim: true`) and the sensor value is below the threshold. Default threshold: `50`. |
 | `cable: baked` | Photos already contain the cable (automatic when a pack is in use). |
 | `cable_path`, `port_xy`, `port_top_xy` | Charging-animation anchors. |
 | `climate_anchors:`, `top_anchors:`, `calibrate` | Tap-target positions for your own images. |
@@ -311,14 +491,12 @@ Prefer the old dialog? `location_tap: more-info`, on the card or on one car.
 
 ## Updating
 
-HACS shows updates as versioned releases. After updating, hard-refresh the
-browser. The running version prints in the browser console when the card
-loads.
+HACS can install this repository directly from its default branch; a GitHub release is not required. Updates include the card and matching dist/images/ files. After updating, refresh the dashboard in your browser or Companion app. The running version prints in the browser console when the card loads.
 
 ## Requirements
 
 Home Assistant with the [tesla_custom](https://github.com/alandtse/tesla)
-HACS integration or the official tesla_fleet integration - and a Tesla. 🚗
+HACS integration, the official tesla_fleet integration, or the Teslemetry integration - and a Tesla. 🚗
 
 ## Credits
 

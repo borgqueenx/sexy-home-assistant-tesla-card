@@ -3,12 +3,12 @@
    Works with both the tesla_custom (HACS) and official tesla_fleet
    integrations - auto-detected per car.
    Install guide, all options, and the image-pack spec live in the README:
-   https://github.com/MrNickIE/tesla-fleet-homeassistant
+   https://github.com/borgqueenx/sexy-home-assistant-tesla-card
    Built by Claude in conversation with MrNickIE - MIT licence, share freely. */
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.13";
+  const CARD_VERSION = "1.1.21";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -37,6 +37,7 @@
        switch, so the fallback matters. */
     steering_heat_sel: "select.{p}heated_steering_wheel",
     lock: "lock.{p}doors",
+    charge_cable_lock: "",
     doors: "binary_sensor.{p}doors",
     windows_cover: "cover.{p}windows",
     frunk: "cover.{p}frunk",
@@ -48,6 +49,7 @@
     online: "binary_sensor.{p}online",
     asleep: "binary_sensor.{p}asleep",
     shift: "sensor.{p}shift_state",
+    speed: "sensor.{p}speed",
     location: "device_tracker.{p}location_tracker",
     sentry: "switch.{p}sentry_mode",
     software: "update.{p}software_update",
@@ -88,6 +90,7 @@
     steering_heat: "select.{p}steering_wheel_heater",  // a select here, not a switch
     steering_heat_sel: "",
     lock: "lock.{p}lock",
+    charge_cable_lock: "lock.{p}charge_cable_lock",
     doors: "",
     windows_cover: "cover.{p}windows",
     frunk: "cover.{p}frunk",
@@ -99,6 +102,7 @@
     online: "binary_sensor.{p}status",
     asleep: "",
     shift: "sensor.{p}shift_state",
+    speed: "sensor.{p}speed",
     location: "device_tracker.{p}location",
     sentry: "switch.{p}sentry_mode",
     software: "update.{p}update",
@@ -117,7 +121,7 @@
   };
 
   const CARD_DEFAULTS = { accent: "#e82127", tpms_min: 38, default_car: 0, show_tpms: true, drive_speed: 1, show_vin: false, map_zoom: 15, location_tap: "map", preview: false };
-  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, location_tap: "", entities: {}, show_sentry: false };
+  const CAR_DEFAULTS = { name: "Tesla", model: "", integration: "auto", image: "", image_side: "", image_charging: "", image_side_plugged: "", image_top_plugged: "", image_top_charging: "", cable: "overlay", cable_path: "", image_climate: "", images: "", port_xy: "159,47", port_top_xy: "40,692", climate_anchors: {}, top_anchors: {}, rest_anchors: {}, rest_anchors_unplugged: {}, climate_transition: {}, climate_controls_position: "left", rest_car_margin: "", rest_car_width: "", defrost_glass: {}, calibrate: false, hide_seats: [], hide_climate: [], show_climate: [], paint: "", prefix: "", drive_motion: "auto", road: null, wheels: null, location_tap: "", entities: {}, steering: "left", speed_entity: "", eta_entity: "", force_drive_anim: false, force_frunk_open: false, force_trunk_open: false, force_plugged: false, lights_lux_below: 50, lux_entity: "", light_angle: 28, light_beam_length: 82, light_beam_width: 16, light_source_size: 7, light_source_thickness: 3.5, light_star_size: 3.2, light_star_intensity: 0.9, light_spot_width: 2.8, light_spot_height: 1.4, light_spot_intensity: 0.82, daylight_points: [], daylight_thickness: 1.15, car_offset_x: 0, name_stats_gap: 0 };
 
   /* how long an assumed state is trusted before the real one wins back */
   const PEND_MS = 25000;
@@ -446,7 +450,8 @@
     blurCover: 2.2,  // smear width as a multiple of the per-frame rotation
     maxSpread: 130,  // degrees, beyond which the ring is smeared enough
     maxCopies: 5,    // each copy is a full image draw; keep the cost bounded
-    clip: 0.74,      // fraction of the fitted ellipse that rotates
+    clip: 1.02,      // slight output overscan
+    face: 0.76,      // fraction of the tire ellipse occupied by the rotating wheel face
     copies: 3,       // stacked copies making the motion blur
     spread: 18       // degrees between the first and last copy
   };
@@ -499,46 +504,28 @@
     const [sx, sy, sa, sb, sp] = src, [dx, dy, da, db, dp] = dst;
     if (!(sa > 0 && sb > 0 && da > 0 && db > 0)) return "";
     const scale = da / sa;
-    /* outermost: squash into dst's ellipse and size it to dst */
-    const out = `translate(${dx} ${dy}) rotate(${dp}) scale(1 ${(db / da).toFixed(4)})` +
+    const cover = WHEEL.clip;
+    const face = WHEEL.face;
+    const out = `translate(${dx} ${dy}) rotate(${dp}) scale(${cover} ${cover}) scale(1 ${(db / da).toFixed(4)})` +
                 ` rotate(${-dp}) scale(${scale.toFixed(4)})`;
-    /* innermost: un-squash src's ellipse to a true circle about its hub */
     const inn = `rotate(${sp}) scale(1 ${(sa / sb).toFixed(4)}) rotate(${-sp})` +
                 ` translate(${-sx} ${-sy})`;
-    /* A stopped wheel is SHARP: the three offset copies exist to make a motion
-       blur, and there is no motion to blur, so a standstill gets one copy at
-       full opacity and no rotation. */
     const moving = dur > 0;
-    /* per-frame rotation at 60fps, and a smear wide enough to cover it */
-    const perFrame = moving ? 6 / dur : 0;
-    const spread = moving
-      ? Math.min(WHEEL.maxSpread, Math.max(WHEEL.spread, WHEEL.blurCover * perFrame))
-      : 0;
-    const n = moving
-      ? Math.max(WHEEL.copies, Math.min(WHEEL.maxCopies, Math.ceil(spread / 22) + 1))
-      : 1;
-    let layers = "";
-    for (let i = 0; i < n; i++) {
-      const off = n === 1 ? 0 : -spread / 2 + spread * i / (n - 1);
-      layers += `<g transform="${out}" opacity="${(1 / n).toFixed(3)}">
-        <g transform="rotate(${off.toFixed(2)})">
-          ${moving ? `<animateTransform attributeName="transform" type="rotate"
-            from="${off.toFixed(2)}" to="${(off - 360).toFixed(2)}"
-            dur="${dur}s" repeatCount="indefinite"/>` : ""}
-          <g transform="${inn}"${lift ? ` filter="url(#dwLift)"` : ""}>
-            <use href="#dwImg"/>
-          </g>
-        </g></g>`;
-    }
-    /* The clip is on a wrapping group with no transform of its own, so it is
-       unambiguously in view space. Kept inside the rim, which also means the
-       pixels swept in from the edges are more wheel and never bodywork. */
-    const c = WHEEL.clip;
-    return `<clipPath id="dwC${id}"><ellipse cx="${dx}" cy="${dy}" rx="${(da * c).toFixed(2)}"` +
-      ` ry="${(db * c).toFixed(2)}" transform="rotate(${dp} ${dx} ${dy})"/></clipPath>` +
+    const maskR = Math.max(sa, sb) * 1.2;
+    const layers = `<g transform="${out}">
+      <g transform="rotate(0)">
+        ${moving ? `<animateTransform attributeName="transform" type="rotate" from="0" to="-360" dur="${dur}s" repeatCount="indefinite"/>` : ""}
+        <g transform="${inn}" mask="url(#dwM${id})"${lift ? ` filter="url(#dwLift)"` : ""}><use href="#dwImg"/></g>
+      </g>
+    </g>`;
+    /* Spin only the inner wheel face. The tyre sidewall and its lighting stay
+       in the source photo; a feathered mask blends the moving face into them. */
+    return `<mask id="dwM${id}" mask-type="luminance" maskUnits="userSpaceOnUse" x="${sx-maskR}" y="${sy-maskR}" width="${maskR*2}" height="${maskR*2}">` +
+      `<ellipse cx="${sx}" cy="${sy}" rx="${(sa * face).toFixed(2)}" ry="${(sb * face).toFixed(2)}" transform="rotate(${sp} ${sx} ${sy})" fill="white" filter="url(#dwWheelFeather)"/></mask>` +
+      `<clipPath id="dwC${id}"><ellipse cx="${dx}" cy="${dy}" rx="${(da * cover).toFixed(2)}"` +
+      ` ry="${(db * cover).toFixed(2)}" transform="rotate(${dp} ${dx} ${dy})"/></clipPath>` +
       `<g clip-path="url(#dwC${id})">${layers}</g>`;
   }
-
   /* seconds per revolution such that the contact patch keeps pace with the
      road it is drawn on */
   function wheelPeriod(wheels, cw, cycle, roadAngle) {
@@ -562,55 +549,99 @@
     const lift = wheels.lift || 1;
     return `<defs>
       <image id="dwImg" href="${src}" x="0" y="0" width="233" height="108" preserveAspectRatio="none"/>
+      <filter id="dwWheelFeather" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="0.65"/></filter>
       <filter id="dwLift" x="-10%" y="-10%" width="120%" height="120%">
         <feComponentTransfer>
           <feFuncR type="linear" slope="${lift}"/><feFuncG type="linear" slope="${lift}"/>
           <feFuncB type="linear" slope="${lift}"/>
         </feComponentTransfer>
-      </filter></defs>` +
+      </filter></defs>
+      <g class="wheelsBounce">` +
       spinWheel("f", wheels.front, wheels.front, 0, dur) +
-      spinWheel("r", wheels.front, rearEllipse(wheels.front, wheels.rear), 1, dur);
+      spinWheel("r", wheels.front, rearEllipse(wheels.front, wheels.rear), 1, dur) +
+      `</g>`;
   }
 
   /* Dashed lane markings sliding along their own axis. The slide is
      stroke-dashoffset rather than a transform, so the dashes travel along
      the line instead of the whole line drifting across the frame. */
-  function driveRoad(w, h, box, road, cycle) {
+  function driveRoad(w, h, box, road, cycle, edgeBounds) {
     if (!road || !((road.lines && road.lines.length) || (road.drops && road.drops.length))) return "";
-    /* the car box only sets the dash scale - one dash period is 0.86 car
-       widths, so the road keeps its proportions whatever pack is loaded */
     const cw = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : w * 0.71;
-    const rad = (road.angle || 0) * Math.PI / 180;
+    const origAngle = road.angle || 0;
+    const rad = origAngle * Math.PI / 180;
     const dx = Math.cos(rad), dy = Math.sin(rad);
-    const len = (Math.abs(w * dx) + Math.abs(h * dy)) * 2.2;
+    const len = (Math.abs(w * dx) + Math.abs(h * dy)) * 4.0;
     const period = Math.max(8, cw * DRIVE.period);
     const on = period * DRIVE.dash;
     const cx = w / 2;
-    /* An explicit `lines` was measured on that photo and is trusted as-is.
-       A `drops` default is derived from the measured car box, whose bottom
-       edge includes the shadow, so on a tightly cropped photo it can land
-       below the frame and the marking is simply never seen. That is exactly
-       what happened to Patsy. Clamped so a default can always be seen. */
-    const spec = road.lines ||
+    const origSpec = road.lines ||
       (road.drops || []).map((d) => [Math.min(h - 3,
         (box && box.length === 4 ? box[3] : h * 0.85) + d[0]), d[1]]);
-    return spec.map((ln, i) => {
+
+    /* Build a two-line spec: the car drives BETWEEN the two lines.
+       Line 0 = near side (below/in front of the car, viewer side)
+       Line 1 = far side (above/behind the car, clipped to not overlay the body) */
+    let spec;
+    if (origSpec.length >= 2) {
+      spec = origSpec;  // already has two or more lines
+    } else {
+      const baseY = origSpec[0][0];
+      const baseW = origSpec[0][1] || cw * DRIVE.width;
+      // Near line: at the original position (below the wheels)
+      // Far line: shifted upward by ~40px so the car sits between them
+      spec = [
+        [baseY, baseW],
+        [Math.max(10, baseY - 40), baseW * 0.6]
+      ];
+    }
+
+    // Clip both road stripes to the card's horizontal edges and the image's
+    // vertical bounds, so they can enter/exit the card without reaching menus.
+    const clipLeft = edgeBounds && Number.isFinite(edgeBounds.left) ? edgeBounds.left : 0;
+    const clipRight = edgeBounds && Number.isFinite(edgeBounds.right) ? edgeBounds.right : w;
+    let html = `<clipPath id="drRoadClip"><rect x="${clipLeft.toFixed(2)}" y="0" width="${Math.max(0, clipRight - clipLeft).toFixed(2)}" height="${h}"/></clipPath>`;
+    // Additional clip for the far line: hide it where it would overlap the car body
+    let farClipUsed = false;
+    if (road.clip) {
+      let farClip = String(road.clip);
+      html += `<clipPath id="drFarClip">${farClip}</clipPath>`;
+      farClipUsed = true;
+    } else if (box && box.length === 4) {
+      html += `<clipPath id="drFarClip"><rect x="-50" y="0" width="${Math.max(0, box[0]) + 50}" height="${h}"/><rect x="${box[2]}" y="0" width="${w - box[2]}" height="${h}"/></clipPath>`;
+      farClipUsed = true;
+    }
+
+    return html + spec.map((ln, i) => {
       const cy = ln[0];
       const sw = Math.max(0.8, ln[1] || cw * DRIVE.width);
-      const off = i * period * 0.37;
-      /* cycle 0 draws the marking without moving it: a car stopped at a
-         junction is still in gear and still on a road, so the road stays and
-         the motion goes. Nick: "At 0, the animation should stop." */
+      /* Both lines start from the same offset (0) and animate the same distance
+         in the same duration so they travel at identical visual speed. */
       const anim = cycle > 0
-        ? `<animate attributeName="stroke-dashoffset" from="${off.toFixed(1)}"
-                 to="${(off - period).toFixed(1)}" dur="${cycle}s" repeatCount="indefinite"/>`
+        ? `<animate attributeName="stroke-dashoffset" from="0"
+                 to="${(-period).toFixed(1)}" dur="${cycle}s" repeatCount="indefinite"/>`
         : "";
-      return `<line x1="${(cx - dx * len / 2).toFixed(1)}" y1="${(cy - dy * len / 2).toFixed(1)}"
-            x2="${(cx + dx * len / 2).toFixed(1)}" y2="${(cy + dy * len / 2).toFixed(1)}"
+      // Near line (index 0): no clip-path needed; the SVG's overflow:hidden clips
+      // it at the viewport edge identically to how the far line's clip rect ends.
+      // Far line (index >= 1): clips to regions outside the car body.
+      const clip = (i >= 1 && farClipUsed)
+        ? ' clip-path="url(#drFarClip)"'
+        : '';
+      /* Both lines use the same centre (cx) and the same half-length so their
+         raw x2 is identical; the SVG viewBox / clip rect trims the right end
+         identically for both.  Do NOT adjust the midpoint per-line — that is
+         what caused the "top stripe goes further right" illusion in earlier
+         versions.  The real fix is to extend len enough that both lines reach
+         well past the right edge so the clip does the trimming, not the endpoint. */
+      const x1 = (cx - dx * len / 2).toFixed(1);
+      const y1 = (cy - dy * len / 2).toFixed(1);
+      const x2 = (cx + dx * len / 2).toFixed(1);
+      const y2 = (cy + dy * len / 2).toFixed(1);      return `<g clip-path="url(#drRoadClip)"><line x1="${x1}" y1="${y1}"
+            x2="${x2}" y2="${y2}"
             stroke="${DRIVE.colour}" stroke-width="${sw.toFixed(2)}" stroke-linecap="butt"
-            stroke-dashoffset="${off.toFixed(1)}"
-            stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}">${anim}
-      </line>`;
+            stroke-dashoffset="0"
+            stroke-dasharray="${on.toFixed(1)} ${(period - on).toFixed(1)}"${clip}>${anim}
+      </line></g>`;
     }).join("");
   }
 
@@ -893,7 +924,7 @@
 
   function normIntegration(v) {
     const s = String(v || "").toLowerCase().replace(/[^a-z]/g, "");
-    if (s === "teslafleet" || s === "fleet") return "tesla_fleet";
+    if (s === "teslafleet" || s === "fleet" || s === "teslemetry") return "tesla_fleet";
     if (s === "teslacustom" || s === "custom") return "tesla_custom";
     return "";
   }
@@ -924,6 +955,7 @@
     flash: "M9 7c2.8 0 5 2.2 5 5s-2.2 5-5 5c-1.7 0-3-2.2-3-5s1.3-5 3-5m0-2C6 5 4 8.1 4 12s2 7 5 7c3.9 0 7-3.1 7-7s-3.1-7-7-7m8 2h5v2h-5V7m0 4h5v2h-5v-2m0 4h5v2h-5v-2z",
     sentry: "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5M12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5m0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z",
     pin: "M12 11.5A2.5 2.5 0 0 1 9.5 9 2.5 2.5 0 0 1 12 6.5 2.5 2.5 0 0 1 14.5 9a2.5 2.5 0 0 1-2.5 2.5M12 2a7 7 0 0 0-7 7c0 5.25 7 13 7 13s7-7.75 7-13a7 7 0 0 0-7-7z",
+    sentry: "M12 4.5C7 4.5 2.73 7.61 1 12c1.73 4.39 6 7.5 11 7.5s9.27-3.11 11-7.5c-1.73-4.39-6-7.5-11-7.5M12 17c-2.76 0-5-2.24-5-5s2.24-5 5-5 5 2.24 5 5-2.24 5-5 5m0-8c-1.66 0-3 1.34-3 3s1.34 3 3 3 3-1.34 3-3-1.34-3-3-3z",
   };
 
   /* Mode-button glyphs. Composed from circles, rects and short curves on a
@@ -945,24 +977,30 @@
            ` style="vertical-align:-3.5px;margin-right:9px;flex:none">${glyph}</svg>`;
   }
 
-  const CLIM_ANCHOR_DEFAULTS = { fl: [121, 164], fr: [233, 164], rl: [123, 289], rc: [176, 289], rr: [229, 289], wheel: [234, 97] };
+  const CLIM_ANCHOR_DEFAULTS = { fl: [121, 164], fr: [233, 164], rl: [123, 289], rc: [176, 289], rr: [229, 289], wheel: [234, 97], vents: [180, 80] };
+  /* climate3 is a taller, newly framed top-down image. Its front seats,
+     rear seats, and steering wheel sit lower than the older cabin artwork;
+     measure these defaults in the shared 360x600 overlay space. */
+  const CLIM3_ANCHOR_DEFAULTS = { fl: [121, 280], fr: [233, 280], rl: [123, 414], rc: [176, 414], rr: [229, 414], wheel: [121, 220], vents: [180, 174] };
   function anchor(map, key, def) {
     const v = map && map[key];
     if (!v) return def;
     const p = String(v).split(",").map(Number);
-    return p.length === 2 && p.every((n) => !isNaN(n)) ? p : def;
+    return (p.length === 2 || p.length === 4) && p.every((n) => !isNaN(n)) ? p : def;
   }
 
   function svgIcon(path, cls) {
     return '<svg class="' + (cls || "") + '" viewBox="0 0 24 24"><path d="' + path + '"/></svg>';
   }
 
-  function heatWaves(id, x, y) {
+  function heatWaves(id, x, y, sqX = 1, scale = 1) {
     const wave = (off, i) =>
       `<path id="${id}_w${i}" d="M ${x + off} ${y + 13} q 4 -3.3 0 -6.5 q -4 -3.3 0 -6.5 q 4 -3.3 0 -6.5 q -4 -3.3 0 -6.5" stroke="#a9adb2" stroke-width="3" fill="none" stroke-linecap="round"/>`;
     return `<g id="${id}" class="tapa" style="cursor:pointer">
       <circle cx="${x}" cy="${y}" r="26" fill="#000" opacity="0"/>
-      ${wave(-9, 0)}${wave(0, 1)}${wave(9, 2)}
+      <g transform="translate(${x}, ${y}) scale(${sqX * scale}, ${scale}) translate(${-x}, ${-y})">
+        ${wave(-9, 0)}${wave(0, 1)}${wave(9, 2)}
+      </g>
       <text id="${id}_auto" x="${x}" y="${y + 25}" text-anchor="middle" font-size="10.5"
             font-weight="700" fill="${IDLE_COL}" style="display:none">Auto</text>
     </g>`;
@@ -1242,13 +1280,54 @@
 
     connectedCallback() {
       this._timer = setInterval(() => { if (this._hass) this._update(); }, 30000);
+      if (typeof ResizeObserver !== "undefined") {
+        this._resizeObserver = new ResizeObserver(() => {
+          if (this._resizeFrame) cancelAnimationFrame(this._resizeFrame);
+          this._resizeFrame = requestAnimationFrame(() => {
+            this._driveTier = null;
+            this._positionClimateLayout();
+            this._updateClimateCable();
+            if (this._hass) this._update();
+          });
+        });
+        this._resizeObserver.observe(this);
+      }
     }
     disconnectedCallback() {
+      if (this._resizeObserver) this._resizeObserver.disconnect();
+      if (this._resizeFrame) cancelAnimationFrame(this._resizeFrame);
       clearInterval(this._timer);
       clearTimeout(this._refT1);
       clearTimeout(this._refT2);
+      if (this._climateCableFrame) cancelAnimationFrame(this._climateCableFrame);
+      this._climateCableFrame = null;
+      clearTimeout(this._flashTimer);
+      clearTimeout(this._hornTimer);
+      clearTimeout(this._climateDriveTimer);
+      this._climateDriveTimer = null;
+      this._queuedClimateView = undefined;
+      if (this._climateTransitionTarget) {
+        this._climateTransitionToken = (this._climateTransitionToken || 0) + 1;
+        this._climateTransitionTarget = null;
+        if (this.shadowRoot) {
+          this.shadowRoot.querySelectorAll(".transitionSnapshot, .snapLayer").forEach((el) => el.remove());
+          this.shadowRoot.querySelectorAll(".transitionFadeLive, .transitionSourceHidden").forEach((el) => el.classList.remove("transitionFadeLive", "transitionSourceHidden"));
+          const card = this.shadowRoot.querySelector("ha-card");
+          if (card) {
+            card.style.overflow = "";
+            if (this._view === "clim" && this._climateMainHeight) {
+              const stableHeight = String(this._climateMainHeight) + "px";
+              card.style.height = stableHeight;
+              card.style.minHeight = stableHeight;
+            } else {
+              card.style.height = "";
+              card.style.minHeight = "";
+              this._climateMainHeight = null;
+            }
+          }
+        }
+      }
     }
-
     get _car() { return this._cars[this._sel]; }
 
     set hass(hass) {
@@ -1284,6 +1363,28 @@
       this._update();
     }
 
+    /* A full rebuild wipes the shadow DOM, snapshots included. Async work
+       (image box measuring, pack probing, plug state) used to land mid-
+       transition and kill the animation, which is why the FIRST climate
+       click after a page load never animated. Defer until it finishes. */
+    _rebuildSoon() {
+      if (this._climateDriveTimer || this._climateTransitionTarget) { this._pendingRebuild = true; return; }
+      this._built = false;
+      if (this._hass) { this._build(); this._update(); }
+    }
+    _flushRebuild() {
+      if (this._pendingRebuild) { this._pendingRebuild = false; this._rebuildSoon(); }
+    }
+    _drainQueuedClimateView() {
+      const queued = this._queuedClimateView;
+      if (queued === undefined) return;
+      this._queuedClimateView = undefined;
+      if (queued === this._view) return;
+      requestAnimationFrame(() => {
+        if (queued !== this._view) this._setView(queued);
+      });
+    }
+
     _selectCar(i) {
       if (i === this._sel) return;
       this._sel = i;
@@ -1291,6 +1392,7 @@
       this._view = "";
       this._built = false;
       this._arm = {};
+      this._lastPlugged = undefined;
       this._build();
       this._update();
     }
@@ -1330,7 +1432,22 @@
       return isNaN(v) ? null : v;
     }
     _is(key, val) {
+      /* Optimistic lock: ignore HA for a few seconds after a command is sent */
+      if (this._opt && this._opt[key] && Date.now() < this._opt[key].expires) {
+        return this._opt[key].state === val;
+      }
       const s = this._st(key);
+      /* Skip "unavailable" — Tesla goes unavailable during wake-up. Fall back
+         to the last known good state so the image doesn't flash to "closed"
+         in the middle of an open sequence. */
+      if (s && s.state === "unavailable") {
+        const last = this._lastKnown && this._lastKnown[key];
+        return last !== undefined ? last === val : false;
+      }
+      if (s) {
+        if (!this._lastKnown) this._lastKnown = {};
+        this._lastKnown[key] = s.state;
+      }
       return !!s && s.state === val;
     }
     /* integration-agnostic helpers */
@@ -1341,24 +1458,9 @@
       return String(s.state).toLowerCase() === "charging";   // tesla_fleet sensor
     }
     _plugged() { return this._is("charger", "on"); }
-    /* Why Sentry cannot be pressed right now, or "" when it can. Tesla does
-       not allow sentry while driving, and the integration reports the switch
-       as unavailable until the car is parked again. */
-    _sentryBlocked() {
-      const s = this._st("sentry");
-      if (!s) return "";
-      if (s.state !== "unavailable" && s.state !== "unknown") return "";
-      const sh = this._st("shift");
-      const g = sh ? String(sh.state).toUpperCase() : "";
-      return g === "D" || g === "R" || g === "N" ? "driving" : "unavailable";
-    }
-    _sentryOn() {
-      const real = this._is("sentry", "on");
-      const want = this._pendVal("sentry");
-      if (want === undefined) return real;
-      if (want === real) { delete this._pend.sentry; return real; }
-      return want;
-    }
+    _visualPlugged() { return this._car.force_plugged === true || this._plugged(); }
+    _visualFrunkOpen() { return this._car.force_frunk_open === true || this._is("frunk", "open"); }
+    _visualTrunkOpen() { return this._car.force_trunk_open === true || this._is("trunk", "open"); }
     /* Defrost is a real switch on tesla_fleet; on tesla_custom it is a climate
        preset. Single source of truth for the button, the glass glow and the
        header badge. */
@@ -1477,7 +1579,11 @@
       const cfg = this._car.wheels;
       if (cfg && cfg.front && cfg.rear) return cfg;
       const hit = this._packKey(src);
-      return hit ? PACK_WHEELS[hit] : null;
+      if (hit) return PACK_WHEELS[hit];
+      const model = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
+      const paint = String(this._car.paint || "").toLowerCase();
+      if ((model === "y" || model.indexOf("modely") >= 0) && paint.indexOf("white") >= 0) return PACK_WHEELS["models/y/white/app"];
+      return null;
     }
     /* The ground plane for the photo we are actually showing.
        drive_motion: off suppresses the moving road altogether. */
@@ -1550,8 +1656,7 @@
           }
           if (x1 <= x0 || y1 <= y0) throw new Error("nothing found");
           this._boxes[url] = [x0 * vb[0] / W, y0 * vb[1] / H, x1 * vb[0] / W, y1 * vb[1] / H];
-          this._built = false;
-          if (this._hass) { this._build(); this._update(); }
+          this._rebuildSoon();
         } catch (e) {
           this._boxes[url] = DF_CALIB[sfx];      // tainted canvas or odd image
         }
@@ -1623,11 +1728,18 @@
       if (!s) return NaN;
       const attrMin = s.attributes ? parseFloat(s.attributes.minutes_to_full_charge) : NaN;
       if (!isNaN(attrMin)) return attrMin;                    // tesla_custom
+
+      // check if it's an ISO timestamp (teslemetry / new tesla_fleet)
+      const t = new Date(s.state).getTime();
+      if (!isNaN(t) && t > 1000000000000) { // arbitrary year 2001+ to avoid tiny numbers parsing as years
+        return Math.max(0, (t - Date.now()) / 60000);
+      }
+
       const v = parseFloat(s.state);
       if (isNaN(v)) return NaN;
       const u = (s.attributes.unit_of_measurement || "").toLowerCase();
       if (u.indexOf("min") === 0) return v;
-      return v * 60;                                          // tesla_fleet reports hours
+      return v * 60;                                          // legacy tesla_fleet reported hours
     }
     /* Image resolution: explicit per-car image_* options win; otherwise an
        `images:` base folder (or the auto-detected HACS images folder) supplies
@@ -1636,9 +1748,14 @@
       const car = this._car;
       return car.images || car._autoBase || "";
     }
+    _preferPng(url) {
+      return typeof url === "string"
+        ? url.replace(/\.jpe?g(?=([?#]|$))/i, ".png")
+        : url;
+    }
     _img(kind) {
       const car = this._car;
-      if (car[kind]) return car[kind];
+      if (car[kind]) return this._preferPng(car[kind]);
       const base = this._imgBase();
       if (!base) return "";
       const FILES = {
@@ -1647,7 +1764,12 @@
         image_side_plugged: "side-plugged.jpg", image_charging: "side-charging.jpg",
         image_climate: "climate.jpg",
       };
-      const f = FILES[kind];
+      let f = FILES[kind];
+      if (kind === "image_climate" && !car.image_climate) {
+        if (car._packFiles) {
+          if (car._packFiles["climate3.jpg"]) f = "climate3.jpg";
+        } else if (car.images) f = "climate3.jpg";
+      }
       /* A lean pack has no cable variants at all, so a request for one resolves
          to the base render and the card draws the cable over it. Without this a
          configured `images:` base would return a URL for a file that is not
@@ -1662,8 +1784,15 @@
       if (this._packCable() && LEAN_FALLBACK[kind]) return this._img(LEAN_FALLBACK[kind]);
       // Auto-detected packs may be partial: only offer files that actually exist,
       // so missing slots fall back to the drawn artwork instead of a broken img.
-      if (!car.images && car._packFiles && !car._packFiles[f]) return "";
-      return base.replace(/\/$/, "") + "/" + f;
+      // If side images are missing, fall back to the climate image we know exists.
+      if (!car.images && car._packFiles && !car._packFiles[f]) {
+        const sideKinds = ["image_side", "image_side_plugged", "image_charging"];
+        if (sideKinds.includes(kind)) {
+          return this._preferPng(base.replace(/\/$/, "") + "/climate.jpg");
+        }
+        return "";
+      }
+      return this._preferPng(base.replace(/\/$/, "") + "/" + f + "?v=1");
     }
     /* The cable spec for the pack on screen, when it declares one. */
     /* The dash path for a baked photo: the car's own override first, then the
@@ -1677,6 +1806,18 @@
     }
     _bakedCablePath() {
       const car = this._car;
+      if (car.cable_points && Array.isArray(car.cable_points) && car.cable_points.length >= 2) {
+        const p = car.cable_points;
+        let d = `M ${p[0][0]} ${p[0][1]} `;
+        for (let i = 1; i < p.length - 1; i++) {
+          const xc = (p[i][0] + p[i + 1][0]) / 2;
+          const yc = (p[i][1] + p[i + 1][1]) / 2;
+          d += `Q ${p[i][0]} ${p[i][1]} ${xc} ${yc} `;
+        }
+        if (p.length > 2) d += `L ${p[p.length - 1][0]} ${p[p.length - 1][1]}`;
+        else d += `L ${p[1][0]} ${p[1][1]}`;
+        return d;
+      }
       if (car.cable_path) return car.cable_path;
       const hay = String(car.images || car._autoBase || car.image_charging ||
                          car.image_side_plugged || car.image_side || "");
@@ -1714,13 +1855,11 @@
       if (car.images || car.image || car.image_side) return;   // explicit config wins
       const dir = /3/.test(String(car.model || "")) ? "3" : "y";
       const paint = String(car.paint || "").toLowerCase().replace(/[^a-z]/g, "");
-      // /local first: a pack in /config/www/tesla-fleet-card/ always wins.
-      // Then the repo itself over GitHub raw - always current, updates on a
-      // plain push. hacsfiles LAST: HACS only manages the JS file for
-      // dashboard plugins and never updates or removes an images tree it once
-      // laid down, so anything found there is likely stale.
-      const REPO_ROOTS = ["https://raw.githubusercontent.com/MrNickIE/tesla-fleet-homeassistant/main/images/",
-                          "/hacsfiles/tesla-fleet-homeassistant/images/"];
+      // Prefer a user-managed local pack, then the images shipped with this HACS
+      // dashboard package. HACS installs the contents of dist/ under its repository
+      // folder, so these image URLs stay alongside the card and update together.
+      const REPO_ROOTS = ["/hacsfiles/sexy-home-assistant-tesla-card/images/",
+                          "https://raw.githubusercontent.com/borgqueenx/sexy-home-assistant-tesla-card/main/images/"];
       const roots = ["/local/tesla-fleet-card/images/", REPO_ROOTS[0], REPO_ROOTS[1]];
       /* A generation-qualified pack wins if one exists, so dropping
          images/models/y-juniper/red/app into the repo or into /local is all it
@@ -1754,16 +1893,13 @@
       };
       candidates = candidates.filter((u) => !wrongCar(u));
       const FILES7 = ["topdown.jpg", "topdown-plugged.jpg", "topdown-charging.jpg",
-                      "side.jpg", "side-plugged.jpg", "side-charging.jpg", "climate.jpg"];
+                      "side.jpg", "side-plugged.jpg", "side-charging.jpg", "climate.jpg", "climate3.jpg"];
       const adopt = (base) => {           // record which of the 7 slots exist, then rebuild once
         car._autoBase = base;
         car._packFiles = {};
         let pending = FILES7.length;
         const done = () => {
-          if (--pending === 0 && car === this._car) {
-            this._built = false;
-            if (this._hass) { this._build(); this._update(); }
-          }
+          if (--pending === 0 && car === this._car) this._rebuildSoon();
         };
         FILES7.forEach((f) => {
           fetch(base + "/" + f, { method: "HEAD" })
@@ -1774,7 +1910,7 @@
       };
       const tryNext = (i) => {            // a folder counts as a pack if ANY standard file exists
         if (i >= candidates.length) return;
-        const PROBE = ["topdown.jpg", "side.jpg", "climate.jpg"];
+        const PROBE = ["topdown.jpg", "side.jpg", "climate.jpg", "climate3.jpg"];
         const tryFile = (j) => {
           if (j >= PROBE.length) return tryNext(i + 1);
           fetch(candidates[i] + "/" + PROBE[j], { method: "HEAD" }).then((r) => {
@@ -1838,30 +1974,28 @@
     }
 
     /* two-tap confirm: returns true when the action should run */
-    _confirm(key, el, restoreText) {
+    _confirm(key, el, restoreText, confirmText) {
+      const lb = el.querySelector(".lb") || el;
       if (!this._arm[key]) {
         this._arm[key] = true;
         el.classList.add("armed");
-        const lb = el.querySelector(".lb") || el;
         const orig = restoreText !== undefined ? restoreText : lb.textContent;
-        lb.textContent = "Tap again";
-        this._armLbl = this._armLbl || {};
-        this._armLbl[key] = orig;
+        el.dataset.confirmText = orig;
+        lb.textContent = confirmText || "Tap again";
         clearTimeout(this._armT[key]);
         this._armT[key] = setTimeout(() => {
           this._arm[key] = false;
           el.classList.remove("armed");
-          lb.textContent = orig;
+          lb.textContent = el.dataset.confirmText || orig;
+          delete el.dataset.confirmText;
         }, 3000);
         return false;
       }
       this._arm[key] = false;
       el.classList.remove("armed");
       clearTimeout(this._armT[key]);
-      /* the timer that would have put the label back has just been cancelled,
-         so put it back here, or "Tap again" stays on the button for good */
-      const lb2 = el.querySelector(".lb") || el;
-      if (this._armLbl && this._armLbl[key] !== undefined) lb2.textContent = this._armLbl[key];
+      lb.textContent = el.dataset.confirmText || restoreText || lb.textContent;
+      delete el.dataset.confirmText;
       return true;
     }
 
@@ -1873,22 +2007,76 @@
       if (!this.shadowRoot) this.attachShadow({ mode: "open" });
       const car = this._car;
       const multi = this._cars.length > 1;
+      const climateModelLabel = car.climate_hide_model === true && this._view === "clim"
+        ? '<span class="nmModel acLabel"><span class="modelSep">| </span>AC</span>'
+        : (car.model ? '<span class="nmModel"><span class="modelSep">| </span>' + esc(car.model) + '</span>' : "");
+      const carOffsetX = Number.isFinite(Number(car.car_offset_x)) ? Number(car.car_offset_x) : 0;
+      const nameStatsGap = Number.isFinite(Number(car.name_stats_gap)) ? Number(car.name_stats_gap) : 0;
+      const nameStatsTranslateY = -20 + nameStatsGap;
+      /* climate view framing, in percent of the image box. Defaults show the
+         hood and windscreen; the tail may run off the bottom. */
+      const climTopN = Number(car.climate_car_top), climHN = Number(car.climate_car_height);
+      const climTop = Number.isFinite(climTopN) ? climTopN : 1;
+      const climH = Number.isFinite(climHN) && climHN > 0 ? climHN : 120;
+      /* climate_car_left: horizontal centre of the car in the climate view.
+         number = percent of card width (default 70); "px"/"%" strings pass through. */
+      const climLeftRaw = car.climate_car_left;
+      const climLeft = (typeof climLeftRaw === "string" && /^\s*-?\d+(\.\d+)?(px|%)\s*$/.test(climLeftRaw))
+        ? climLeftRaw.trim()
+        : (climLeftRaw !== undefined && climLeftRaw !== null && climLeftRaw !== "" && Number.isFinite(Number(climLeftRaw)) ? Number(climLeftRaw) + "%" : "70%");
+      const climBackSizeN = Number(car.climate_back_size);
+      const climBackSize = Number.isFinite(climBackSizeN) && climBackSizeN > 0 ? climBackSizeN : 28;
+      const climControlsGapN = Number(car.climate_controls_gap);
+      const climControlsGap = Number.isFinite(climControlsGapN) ? Math.max(-64, Math.min(64, climControlsGapN)) : 6;
+      const climTempGapN = Number(car.climate_temp_gap);
+      const climTempGap = Number.isFinite(climTempGapN) ? Math.max(-32, Math.min(32, climTempGapN)) : 4;
+      const climateCssPosition = (value, fallback) => {
+        if (typeof value === "string" && /^\s*-?\d+(?:\.\d+)?(?:px|%)\s*$/.test(value)) return value.trim();
+        return value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) + "px" : fallback;
+      };
+      const climBackLeft = climateCssPosition(car.climate_back_x !== undefined ? car.climate_back_x : car.climate_back_left, "auto");
+      const climBackTop = climateCssPosition(car.climate_back_y !== undefined ? car.climate_back_y : car.climate_back_top, "auto");
+      const climLeftTopN = Number(car.climate_left_top);
+      const climLeftTop = Number.isFinite(climLeftTopN) ? climLeftTopN : 108;
+      const climateVerticalOffset = (key) => {
+        const value = car[key];
+        return value !== undefined && value !== null && value !== "" && Number.isFinite(Number(value)) ? Number(value) : 0;
+      };
+      const climTempsY = climateVerticalOffset("climate_temps_y");
+      const climControlsY = climateVerticalOffset("climate_controls_y");
+      const climModesY = climateVerticalOffset("climate_modes_y");
+      const climCopY = climateVerticalOffset("climate_cop_y");
+      const climateControlsBottom = String(car.climate_controls_position || "left").trim().toLowerCase() === "bottom";
+      const climateViewClass = this._view === "clim"
+        ? `climMode${climateControlsBottom ? " climControlsBottom" : ""}`
+        : (this._view === "map" ? "mapMode" : "");
       this.shadowRoot.innerHTML = `
 <style>
-  :host { display:block; }
-  * { box-sizing:border-box; }
+  :host { display:block; position:relative; isolation:isolate; --clim-top:${climTop}%; --clim-h:${climH}%; --clim-left:${climLeft}; --clim-left-top:${climLeftTop}px; --clim-back-size:${climBackSize}px; --clim-back-left:${climBackLeft}; --clim-back-top:${climBackTop}; --clim-controls-gap:${climControlsGap}px; --clim-temp-gap:${climTempGap}px; --clim-temps-y:${climTempsY}px; --clim-controls-y:${climControlsY}px; --clim-modes-y:${climModesY}px; --clim-cop-y:${climCopY}px; }
+  * { box-sizing:border-box; -webkit-text-size-adjust:100%; text-size-adjust:100%; }
   ha-card {
-    background:#141414; color:#ececec; border-radius:16px; overflow:hidden;
-    font-family:-apple-system,'Segoe UI',Roboto,sans-serif; padding:16px 16px 10px;
+    background:#151617; color:#ececec; border-radius:16px; overflow:hidden;
+    font-family:-apple-system,'Segoe UI',Roboto,sans-serif; padding:16px 16px 4px; position:relative;
   }
   .hdr { display:flex; align-items:flex-start; justify-content:space-between; }
   .nmBtn { background:none; border:none; padding:0; color:inherit; font:inherit;
     display:flex; align-items:center; gap:3px; cursor:${multi ? "pointer" : "default"}; }
   .nm { font-size:24px; font-weight:600; letter-spacing:.2px; }
+  .nmTitle { display:flex; align-items:baseline; gap:8px; transform:translateY(-15px); }
+  .nmModel { display:inline-block; font-size:12px; font-weight:400; color:#9b9b9b; letter-spacing:.3px; }
+  .nmModel.acLabel { -webkit-text-stroke:1px #151617; paint-order:stroke fill; }
   .nmBtn svg { width:19px; height:19px; fill:#8a8a8a; margin-top:3px; ${multi ? "" : "display:none;"} }
-  .battLine { display:flex; align-items:center; gap:7px; margin-top:5px; color:#9b9b9b; font-size:13px; }
-  .battLine #battBolt { display:flex; }
-  .battLine #battBolt svg { width:13px; height:13px; fill:#4fd07a; }
+  .carStage { position:relative; }
+  .infoStack { display:block; }
+  .infoHome > .infoStack { transform:translateY(${nameStatsTranslateY}px); }
+  .chargeInfoMoved #infoHome { min-height:38px; }
+  .carStage > .infoStack { position:absolute; left:8px; top:0; bottom:auto; z-index:4; display:flex; flex-direction:column-reverse; align-items:flex-start; width:max-content; max-width:calc(100% - 16px); white-space:nowrap; }
+  .carStage > .infoStack .sub { margin-top:.5px; }
+  .infoStack.drivingInfo { display:flex; flex-direction:column-reverse; align-items:flex-start; }
+  .infoStack.drivingInfo .sub { margin-top:.5px; }
+  .speedLine { display:none; font-size:13px; color:#9b9b9b; margin-top:.5px; white-space:nowrap; }
+  .speedLine.show { display:block; }
+  .battLine { display:flex; align-items:center; gap:7px; margin-top:.5px; color:#9b9b9b; font-size:13px; }
   .battLine #battDefrost { display:flex; }
   .battLine #battDefrost svg { width:12px; height:13px; }
   .chgBtns { display:none; grid-template-columns:1fr 1fr; gap:8px; margin-top:12px; }
@@ -1897,7 +2085,92 @@
     font-size:12.5px; padding:9px 0; border-radius:10px; cursor:pointer; }
   .chgBtns button:active { background:#2c2c2c; }
   .climWrap { margin-bottom:8px; }
+  .climExtrasOverlay { position:absolute; left:10px; right:auto; top:67%; bottom:auto; transform:translateY(-50%); z-index:4; display:flex; flex-direction:column; align-items:center; gap:6px; width:25%; max-width:145px; pointer-events:none; }
+  .climExtrasOverlay:empty { display:none; }
+  .climExtrasOverlay .climX { width:100%; margin:0; padding:6px 5px; border:1px solid #ffffff24; border-radius:8px; background:#171717b8; font-size:11px; line-height:1.2; text-align:center; white-space:normal; overflow-wrap:anywhere; pointer-events:auto; }
+  .climMode .climExtrasOverlay { position:absolute; left:16px; right:auto; top:66%; bottom:auto; transform:translateY(-50%); z-index:13; width:25%; max-width:145px; }
+  /* Left-side climate stack: temperatures, one unbroken AC row, then mode buttons. */
+  .climMode .climLeft { position:absolute; left:16px; width:calc(var(--clim-left) - 32px); top:0; display:flex; flex-direction:column;
+    align-items:stretch; z-index:24; pointer-events:none; }
+  .climMode .climPage > .climTemps { position:absolute; left:16px; top:50%; transform:translateY(-50%); min-height:0; display:block;
+    width:var(--clim-panel-width,calc(var(--clim-left) - 32px)); max-width:none; margin:0; padding:0; white-space:pre-line; line-height:1.35; text-align:left; z-index:14; }
+  .climMode .climPage > .climTemps { translate:0 var(--clim-temps-y,0px); }
+
+  ha-card.climMode > #ctlBack { position:absolute; left:var(--clim-back-left); top:var(--clim-back-top);
+    width:var(--clim-back-size); height:var(--clim-back-size); min-width:var(--clim-back-size); min-height:var(--clim-back-size);
+    display:flex; align-items:center; justify-content:center; padding:0; border-radius:50%; font-size:calc(var(--clim-back-size) * .7);
+    line-height:1; color:#ececec; cursor:pointer; pointer-events:auto; z-index:100; background:#2b2b2bf2; border:1px solid #ffffff30; box-shadow:0 2px 8px #0008; }
+  /* the header sits above the car box; its text lines must not swallow taps meant for the back button */
+  .climMode .infoHome, .climMode .infoStack, .climMode .battLine, .climMode .sub, .climMode .speedLine { pointer-events:none; }
+  .climMode .climLeft .climExtrasOverlay { position:absolute; left:0; top:calc(var(--clim-left-top) + 61px); right:auto; bottom:auto;
+    transform:none; display:flex; flex-direction:column; flex-wrap:nowrap; align-items:stretch; gap:6px;
+    width:100%; max-width:none; pointer-events:none; white-space:normal; }
+  .climMode .climLeft .climExtrasOverlay > * { pointer-events:auto; }
+  .climMode .climLeft .climExtrasOverlay > .climCtl { align-self:flex-start; display:flex; flex-direction:row; flex-wrap:nowrap;
+    align-items:center; justify-content:flex-start; gap:0; width:max-content; max-width:none; margin:0 0 26px; white-space:nowrap; }
+  .climMode .climLeft .climExtrasOverlay > .climCtl > * + * { margin-left:var(--clim-controls-gap,6px); }
+  .climMode .climLeft .climExtrasOverlay > .climCtl > * { flex:0 0 auto; }
+  .climMode:not(.climControlsBottom) .climLeft .climCtl { margin-left:-8px; }
+  .climMode .climLeft .climExtrasOverlay > .climModesBlock { display:flex; flex-direction:column; align-items:stretch; gap:6px; width:100%; translate:0 var(--clim-modes-y,0px); }
+  .climMode .climLeft .climExtrasOverlay > .climModesBlock > .climX { align-self:stretch; width:100%; min-width:0; max-width:none; white-space:nowrap; flex:none; }
+  .climMode .climLeft .climExtrasOverlay > .climCtl { translate:0 var(--clim-controls-y,0px); }
+  .climMode.climControlsBottom .climLeft { left:0; top:0; bottom:12px !important; width:100% !important; height:auto; align-items:stretch; }
+  .climMode.climControlsBottom .climLeft .climTemps { left:16px; width:var(--clim-panel-width,calc(var(--clim-left) - 32px)); }
+  .climMode.climControlsBottom .climLeft .climExtrasOverlay { position:static; inset:auto; transform:none; display:flex;
+    flex-direction:column; align-items:stretch; align-self:flex-start; gap:6px; width:var(--clim-panel-width,calc(var(--clim-left) - 32px));
+    max-width:none; margin:calc(var(--clim-left-top) + 61px) 0 0 16px; padding-top:var(--clim-controls-placeholder,0px); }
+  .climMode.climControlsBottom .climLeft .climExtrasOverlay > .climCtl { position:absolute; left:50%; top:auto; bottom:0;
+    transform:translateX(-50%); align-self:center; max-width:calc(100% - 32px); margin:0; }
   .climImg { max-height:360px; }
+  .carDepart { position:absolute !important; z-index:20; margin:0 !important; max-width:none !important;
+    pointer-events:none !important; transform-origin:center; will-change:transform,opacity; }
+  .carDepart.toClimateUnplugged { animation:teslaAwayLowerLeft var(--climate-away-duration,.75s) cubic-bezier(.36,.02,.9,.34) both; }
+  .carDepart.toClimatePlugged { animation:teslaAwayUpperLeft var(--climate-away-duration,.75s) cubic-bezier(.36,.02,.9,.34) both; }
+  .carDepart.fromClimate { animation:climateAwayUp var(--climate-away-duration,.75s) cubic-bezier(.2,.1,.9,.34) both; }
+  .climWrap.driveIn { transform-origin:center bottom; will-change:transform,opacity;
+    animation:climateDriveUp var(--climate-drive-in-duration,.72s) cubic-bezier(.14,.7,.22,1) var(--climate-drive-in-delay,.64s) both; }
+  .climMode .climWrap.driveIn .climImg,
+  .climMode .climWrap.driveIn svg.ovl { animation:climateImageRaise var(--climate-drive-in-duration,.72s) cubic-bezier(.14,.7,.22,1) var(--climate-drive-in-delay,.64s) both; }
+  .mainArrival { animation:mainCarArrive var(--climate-drive-in-duration,.72s) cubic-bezier(.12,.7,.22,1) var(--climate-drive-in-delay,.64s) both; }
+  .mainArrival.mainArrivalPlugged { animation-name:mainCarArrivePlugged; }
+  .mainUIArrival { animation:climateControlsIn .36s ease var(--climate-ui-in-delay,0s) both; }
+  .restHotspotsPending { opacity:0 !important; visibility:hidden; pointer-events:none !important; }
+  .restHotspotsFadeIn { visibility:visible; animation:climateControlsIn .36s ease var(--climate-ui-in-delay,0s) both; }
+  .climMode .climateMenuIn { animation:climateControlsIn .36s ease var(--climate-ui-in-delay,0s) both; }
+  .transitionFadeLive { animation:transitionFade var(--climate-away-duration,.5625s) linear both; pointer-events:none !important; }
+  .transitionSourceHidden { opacity:0 !important; visibility:hidden !important; pointer-events:none !important; }
+  .snapLayer { position:absolute; inset:0; z-index:30; overflow:hidden; border-radius:16px;
+    font-family:-apple-system,'Segoe UI',Roboto,sans-serif; color:#ececec; -webkit-text-size-adjust:100%; text-size-adjust:100%; }
+  .snapLayer, .snapLayer * { pointer-events:none !important; }
+  .snapLayer.carSnapLayer { z-index:10; }
+  @keyframes teslaAwayLowerLeft {
+    0% { transform:translate3d(0,0,0) scale(1); opacity:1; }
+    38% { transform:translate3d(-9%,7%,0) scale(1.025); opacity:1; }
+    100% { transform:translate3d(-150%,155%,0) scale(.58); opacity:0; }
+  }
+  @keyframes teslaAwayUpperLeft {
+    0% { transform:translate3d(0,0,0) scale(1); opacity:1; }
+    38% { transform:translate3d(-9%,-7%,0) scale(1.025); opacity:1; }
+    100% { transform:translate3d(-150%,-145%,0) scale(.58); opacity:0; }
+  }
+  @keyframes climateAwayUp {
+    from { transform:translate3d(0,0,0); }
+    to { transform:translate3d(0,calc(-2% - var(--clim-top) - var(--clim-h)),0); }
+  }
+  @keyframes climateDriveUp {
+    from { transform:translate3d(0,calc(100% + 64px - var(--clim-top)),0); opacity:1; }
+    to { transform:translate3d(0,0,0); opacity:1; }
+  }
+  @keyframes climateImageRaise { from { top:calc(var(--clim-top) + 16%); } to { top:var(--clim-top); } }
+  @keyframes climateControlsIn { from { opacity:0; } to { opacity:1; } }
+  @keyframes climateCtlArrive { from { opacity:0; transform:translate(-50%,88px); } to { opacity:1; transform:translate(-50%,0); } }
+  @keyframes mainCarArrive { from { transform:translate3d(125%,-92%,0); opacity:0; } to { transform:translateX(var(--car-offset-x,0px)); opacity:1; } }
+  @keyframes mainCarArrivePlugged { from { transform:translate3d(125%,92%,0); opacity:0; } to { transform:translateX(var(--car-offset-x,0px)); opacity:1; } }
+  @keyframes transitionFade { from { opacity:1; } to { opacity:0; } }
+  @media (prefers-reduced-motion:reduce) {
+    .carDepart, .climWrap.driveIn, .mainArrival, .mainUIArrival, .climateMenuIn, .transitionFadeLive, .restHotspotsFadeIn {
+      animation-duration:.01ms; animation-delay:0ms; }
+  }
   .defrostBtn { display:block; width:100%; background:#1f1f1f; border:none; color:#dcdcdc;
     font-family:inherit; font-size:12.5px; padding:10px 0; border-radius:10px; cursor:pointer; margin-top:12px; }
   .defrostBtn.on { color:#4fa3ff; }
@@ -1932,13 +2205,14 @@
           background:#3a2411; border:1px solid #6b4318; color:#f0c99a; max-width:520px; }
   .diag code { background:#00000055; padding:1px 4px; border-radius:3px; font-size:12px; }
   .diag b { color:#fff; }
-  .sub { font-size:13px; color:#9b9b9b; margin-top:3px; }
-  .hdr-r { display:flex; align-items:center; gap:8px; }
+  .sub { font-size:13px; color:#9b9b9b; margin-top:5px; }
+  .hdr-r { display:flex; align-items:center; gap:8px; transform:translateY(-8px); }
   .icobtn { background:none; border:none; width:32px; height:32px; border-radius:50%;
     display:flex; align-items:center; justify-content:center; cursor:pointer; }
   .icobtn svg { width:18px; height:18px; fill:#b8b8b8; }
   .icobtn:active { background:#242424; }
   .spin svg { animation: rot 1s linear infinite; }
+  .rowHead svg.climFan.spin { animation:rot 1s linear infinite; }
   @keyframes rot { to { transform:rotate(360deg);} }
 
   .carMenu { position:absolute; z-index:5; margin-top:4px; background:#242424; border-radius:12px;
@@ -1950,11 +2224,67 @@
   .carMenu button:hover { background:#2e2e2e; }
   .dot { width:10px; height:10px; border-radius:50%; display:inline-block; border:1px solid #555; }
 
-  .carBox { margin:4px auto 0; max-width:330px; position:relative; }
+  .carBox { margin:4px auto 0; max-width:330px; position:relative; transform:translateX(var(--car-offset-x, 0px)); }
+  /* car_offset_x is for the exterior car artwork; keep the portrait cabin centered. */
+  .climMode .carBox { transform:none; }
+  .climMode .hdr { position:absolute; top:0; left:0; right:0; z-index:12; }
+  .climMode .carStage { display:flex; flex:1 1 auto; min-height:0; flex-direction:column; margin:-16px -16px -4px; }
+  .climMode #carBox { margin:0; width:100%; max-width:none; flex:1 1 auto; min-height:0;
+    display:block; transform:none; position:relative; z-index:9; }
+  ha-card.climMode { display:flex; flex-direction:column; background:#151617; }
+  .climMode .hdr { position:absolute; top:16px; left:16px; right:16px; flex:none; }
+  .climMode .climWrap { position:absolute; inset:0 0 64px; width:100%; max-width:100%; margin:0;
+    display:block; overflow:visible; }
+  .climMode .imgWrap:not(.rest) .climImg { position:absolute; left:var(--clim-left); top:var(--clim-top); transform:translateX(-50%);
+    width:auto; height:var(--clim-h); max-width:none; max-height:none; object-fit:contain; }
+  .climMode .climWrap svg.ovl { position:absolute; top:var(--clim-top); left:var(--clim-left);
+    width:auto; height:var(--clim-h); max-width:none; aspect-ratio:1095/2256; transform:translateX(-50%); }
+  .carDepart.fromClimate.climWrap { display:block; overflow:visible; }
+  .carDepart.fromClimate.climWrap .climImg { position:absolute; left:var(--clim-left); top:var(--clim-top); transform:translateX(-50%);
+    width:auto; height:var(--clim-h); max-width:none; max-height:none; }
+  .carDepart.fromClimate svg.ovl { position:absolute; top:var(--clim-top); left:var(--clim-left); width:auto; height:var(--clim-h);
+    aspect-ratio:1095/2256; transform:translateX(-50%); }
+  .climMode .climPage { position:absolute; inset:0; width:100%; max-width:none; margin:0; pointer-events:none; }
+  .climCableLayer { position:absolute; inset:0; width:100%; height:100%; overflow:visible; z-index:8; pointer-events:none; }
+  .climMode #climCableLive { stroke-opacity:.72; }
+  .climMode #climCableDashLive { stroke-opacity:.72; }
+  .climMode .climLeft .climCtl #climPwr, .climMode .climLeft .climCtl #climVent { width:auto; flex:0 0 auto; }
+  .climMode .climLeft .climCtl .climTempAdjust { display:flex; flex-direction:row; flex-wrap:nowrap; align-items:center; justify-content:center; gap:0; flex:0 0 auto; }
+  .climMode .climLeft .climCtl .climTempAdjust > * + * { margin-left:var(--clim-temp-gap,4px); }
+  .climMode .climLeft .climCtl #tDn, .climMode .climLeft .climCtl #tTgt, .climMode .climLeft .climCtl #tUp { flex:0 0 auto; }
+  .climMode .climLeft .climCtl #tTgt { font-size:28px; min-width:0; padding:0 2px; position:relative; }
+  .climMode .climTemps { position:absolute; left:16px; top:calc(19.5% + 43px); width:calc(var(--clim-left) - 32px); max-width:none; margin:0;
+    padding:0; border-radius:6px; background:transparent; transform:translateY(-50%); white-space:pre-line; line-height:1.35;
+    text-align:center; z-index:14; text-shadow:0 1px 4px #000,0 0 7px #000; }
+  .climMode #carBox > .backBtn { top:var(--clim-back-top); left:var(--clim-back-left); z-index:30; width:var(--clim-back-size); height:var(--clim-back-size);
+    display:flex; align-items:center; justify-content:center; padding:0; pointer-events:auto;
+    background:#2b2b2bf2; border:1px solid #ffffff30; box-shadow:0 2px 8px #0008; }
+  ha-card.climMode > #ctlBack .backChevron { display:block; width:22px; height:22px; flex:none; }
+  ha-card.climMode > #ctlBack .backChevron path { fill:none; stroke:#ececec; stroke-width:2.8; stroke-linecap:round; stroke-linejoin:round; }
+  /* degree sign hangs off the number, so it does not count for centering */
+  .climCtl .big .tDeg { position:static; display:inline-block; margin-left:1px; font-size:.55em; line-height:1; vertical-align:super; }
+  .climMode .copWrap { position:absolute; left:12px; bottom:64px; z-index:24; pointer-events:auto; translate:0 var(--clim-cop-y,0px); }
+  .climMode .nmTitle, .climMode .infoStack { text-shadow:0 1px 5px #000; }
+  .climMode .infoStack { opacity:1; z-index:25; }
+  .climMode .nmModel { display:inline-block; }
+  .hdr { position:relative; z-index:31; pointer-events:none; }
+  .hdr * { pointer-events:auto; }
   svg.car { width:100%; height:auto; display:block; }
   .imgWrap { position:relative; width:fit-content; margin:0 auto; }
   .imgWrap:not(.rest) .carImg { width:auto; max-width:100%; max-height:420px; }
-  .imgWrap.rest { cursor:pointer; }
+  .imgWrap.rest { position:relative; overflow:visible; margin:${car.rest_car_margin || "-75px -10px -10px auto"}; width:${car.rest_car_width || "280px"}; }
+  @keyframes suspBounce { 0%,100% { translate:0 0; } 50% { translate:0 2px; } }
+  .imgWrap.rest.driving { animation: suspBounce 1.4s ease-in-out infinite; will-change:translate; }
+  .restOvlBtn { cursor:pointer; }
+  .restFrunkHitButton { position:absolute; z-index:40; display:none; margin:0; padding:0; border:0;
+    background:transparent; cursor:pointer; pointer-events:auto; }
+  .restOvlBtn text.rLbl { fill:#e6e6e6; font-size:7.5px; font-weight:600; font-family:inherit; stroke:#000; stroke-width:1px; stroke-linejoin:round; paint-order:stroke fill; }
+  .restOvlBtn line { stroke:#ffffff44; stroke-width:0.4; }
+  .restOvlBtn circle.rDot { fill:#ffffff66; r:1.2; }
+  .restOvlBtn:hover text.rLbl { fill:#fff; }
+  .restOvlBtn.armed text.rLbl { fill:#e0a63c !important; }
+  .restOvlBtn.armed line { stroke:#e0a63c88; }
+  .restOvlBtn.armed circle.rDot { fill:#e0a63c; }
   .ctlBtn { position:absolute; left:50%; transform:translateX(-50%); bottom:6px;
     background:#2b2b2bd9; border:none; color:#e6e6e6; font-family:inherit; font-size:12.5px;
     padding:6px 18px; border-radius:15px; cursor:pointer; }
@@ -1977,7 +2307,7 @@
   .mapBack:hover { background:#242424f2; }
   .mapBack .bch { font-size:17px; margin-top:-2px; }
   .carImg { width:100%; display:block; }
-  svg.ovl { position:absolute; left:0; top:0; width:100%; height:100%; }
+  svg.ovl { position:absolute; left:0; bottom:0; width:100%; aspect-ratio:660/400; overflow:visible; z-index:2; }
   svg.car text { font-family:-apple-system,'Segoe UI',Roboto,sans-serif; }
   .tapa { cursor:pointer; }
   /* mist animation is SMIL (in the SVG markup) - CSS transforms on filtered
@@ -1989,31 +2319,31 @@
   .climX.on { color:#4fa3ff; }
   .copWrap { margin-top:14px; }
   .copLbl { font-size:12.5px; color:#9b9b9b; margin-bottom:7px; }
-  .copSeg { display:flex; background:#1f1f1f; border-radius:10px; padding:3px; gap:3px; }
+  .copSeg { display:flex; background:rgba(31,31,31,.8); border-radius:10px; padding:3px; gap:3px; }
   .copSeg button { flex:1; background:none; border:none; color:#9b9b9b; font-family:inherit;
     font-size:12.5px; padding:7px 0; border-radius:8px; cursor:pointer; }
-  .copSeg button.on { background:#3a3a3a; color:#fff; }
+  .copSeg button.on { background:rgba(58,58,58,.9); color:#fff; }
   .calib { position:absolute; top:4px; right:4px; z-index:3; pointer-events:none;
     background:#000000cc; color:#ffd47f; font-size:11px; padding:3px 9px; border-radius:8px; }
   .tapa.armed text.olbl { fill:#e0a63c !important; }
 
-  .acts { display:flex; justify-content:space-around; margin:2px 8px 4px; }
-  .abtn { display:flex; flex-direction:column; align-items:center; gap:5px;
-    background:none; border:none; cursor:pointer; color:#a8a8a8; font-size:11px;
-    font-family:inherit; padding:6px 10px; border-radius:10px; }
+  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px 8px 4px; }
+  .abtn { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; width:100%;
+    background:none; border:none; cursor:pointer; color:#a8a8a8; font-size:10.5px;
+    font-family:inherit; padding:6px 1px; border-radius:10px; white-space:nowrap; }
   .abtn svg { width:22px; height:22px; fill:#d9d9d9; }
   .abtn:active { background:#242424; }
   .abtn.armed { color:#e0a63c; } .abtn.armed svg { fill:#e0a63c; }
   .abtn.on svg { fill:#4fa3ff; } .abtn.on { color:#4fa3ff; }
-  /* Sentry on: a slow dark red pulse, so it reads as "watching" not "selected".
-     It STARTS red: starting grey meant a tap showed nothing for over a
-     second, which read as the tap not having worked. */
-  @keyframes sentryPulse { 0%, 100% { color:#c62828; fill:#c62828; } 50% { color:#a8a8a8; fill:#d9d9d9; } }
-  #aSentry.on, #aSentry.on svg { animation:sentryPulse 3s ease-in-out infinite; }
-  #aSentry.blocked { opacity:.4; cursor:default; }
+  .abtn.locked { color:#90c99a; } .abtn.locked svg { fill:#90c99a; }
+  .abtn:disabled { opacity:.55; cursor:default; }
+  @keyframes sentryPulse { 0% { fill: #d9d9d9; color: #a8a8a8; } 50% { fill: #cc0000; color: #cc0000; } 100% { fill: #d9d9d9; color: #a8a8a8; } }
+  #aSentry.on svg { animation: sentryPulse 3s infinite; fill: #d9d9d9; }
+  #aSentry.on { animation: sentryPulse 3s infinite; color: #a8a8a8; }
 
   .rows { margin-top:6px; border-top:1px solid #262626; }
   .row { border-bottom:1px solid #262626; }
+  .row:last-child { border-bottom:none; }
   .rowHead { display:flex; align-items:center; gap:12px; width:100%; background:none; border:none;
     color:#ececec; font:inherit; text-align:left; padding:13px 4px; cursor:pointer; }
   .rowHead > svg.ric { width:20px; height:20px; fill:#c9c9c9; flex:none; }
@@ -2024,13 +2354,13 @@
   .rowBody { display:none; padding:2px 4px 14px 36px; }
   .row.open .rowBody { display:block; }
 
-  .climCtl { display:flex; align-items:center; justify-content:center; gap:14px; }
-  .climCtl .big { font-size:34px; font-weight:300; min-width:96px; text-align:center; }
-  .arrow { background:none; border:none; color:#8f8f8f; font-size:26px; cursor:pointer; padding:4px 10px; }
+  .climCtl { display:flex; align-items:center; justify-content:center; gap:8px; flex-wrap:nowrap; min-width:0; }
+  .climCtl .big { font-size:34px; font-weight:300; min-width:70px; text-align:center; flex-shrink:0; }
+  .arrow { background:none; border:none; color:#8f8f8f; font-size:${(car.climate_icon_size || 24) + 2}px; cursor:pointer; padding:4px 6px; flex-shrink:0; }
   .arrow:active { color:#fff; }
   .pwr { display:flex; flex-direction:column; align-items:center; gap:3px; background:none; border:none;
-    color:#a8a8a8; font-size:10.5px; font-family:inherit; cursor:pointer; }
-  .pwr svg { width:20px; height:20px; fill:#d9d9d9; }
+    color:#a8a8a8; font-size:10.5px; font-family:inherit; cursor:pointer; min-width:40px; flex-shrink:0; padding:4px; }
+  .pwr svg { width:${car.climate_icon_width || car.climate_icon_size || 24}px !important; height:${car.climate_icon_height || car.climate_icon_size || 24}px !important; min-width:${car.climate_icon_width || car.climate_icon_size || 24}px !important; min-height:${car.climate_icon_height || car.climate_icon_size || 24}px !important; fill:#d9d9d9; flex-shrink:0 !important; display:block !important; }
   .pwr.on svg { fill:#4fa3ff; } .pwr.on { color:#4fa3ff; }
 
   .chgLine1 { font-size:13.5px; color:#ececec; }
@@ -2066,16 +2396,20 @@
   .mapBox { position:relative; border-radius:10px; overflow:hidden; min-height:260px; }
   .mapBox ha-card { border:none; box-shadow:none; background:none; border-radius:10px; }
   .mapNote { padding:26px 20px; text-align:center; color:#9b9b9b; font-size:13px; line-height:1.5; }
-  .climPage { max-width:330px; margin:0 auto; }
+  .climPage { max-width:400px; margin:0 auto; }
   .climTemps { text-align:center; color:#9b9b9b; font-size:13px; margin:10px 0 6px; }
 </style>
-<ha-card class="${this._view === "clim" ? "climMode" : this._view === "map" ? "mapMode" : ""}">
+<ha-card class="${climateViewClass}"${this._climateMainHeight ? ` style="height:${this._climateMainHeight}px;min-height:${this._climateMainHeight}px"` : ""}>
+  <div class="carStage" id="carStage" style="--car-offset-x:${carOffsetX}px">
   <div class="hdr">
     <div style="position:relative">
-      <button class="nmBtn" id="nmBtn"><span class="nm">${car.name}</span>${svgIcon(ICONS.chev)}</button>
-      <div class="battLine"><span class="battGlyph"><span class="battFill" id="battFill"></span></span>
-        <span id="battTxt">-</span><span id="battBolt" style="display:none">${svgIcon(ICONS.bolt)}</span><span id="battDefrost" style="display:none" title="Defrost on"><svg viewBox="0 0 24 24"><path d="M6 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M12 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M18 21 q4 -4.5 0 -9 q-4 -4.5 0 -9" fill="none" stroke="#ff8c42" stroke-width="2.4" stroke-linecap="round"/></svg></span></div>
-      <div class="sub" id="sub">-</div>
+      <button class="nmBtn" id="nmBtn"><span class="nmTitle"><span class="nm">${car.name}</span>${climateModelLabel}</span>${svgIcon(ICONS.chev)}</button>
+      <div id="infoHome" class="infoHome"><div class="infoStack" id="infoStack">
+        <div class="sub" id="sub">-</div>
+        <div class="speedLine" id="speedLine"></div>
+        <div class="battLine"><span class="battGlyph"><span class="battFill" id="battFill"></span></span>
+          <span id="battTxt">-</span><span id="battDefrost" style="display:none" title="Defrost on"><svg viewBox="0 0 24 24"><path d="M6 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M12 21 q4 -4.5 0 -9 q-4 -4.5 0 -9 M18 21 q4 -4.5 0 -9 q-4 -4.5 0 -9" fill="none" stroke="#ff8c42" stroke-width="2.4" stroke-linecap="round"/></svg></span></div>
+      </div></div>
       <div class="diag" id="diag" hidden></div>
       <div class="carMenu" id="carMenu" hidden></div>
     </div>
@@ -2085,19 +2419,22 @@
   </div>
 
   <div class="carBox" id="carBox"></div>
+  <button class="restFrunkHitButton" id="restFrunkHitButton" type="button" aria-label="Frunk"></button>
+  </div>
 
   <div class="acts">
     <button class="abtn" id="aFlash">${svgIcon(ICONS.flash)}<span class="lb">Flash</span></button>
     <button class="abtn" id="aHonk">${svgIcon(ICONS.horn)}<span class="lb">Honk</span></button>
     <button class="abtn" id="aPort">${svgIcon(ICONS.plug)}<span class="lb">Port</span></button>
+    <button class="abtn" id="aLock" aria-label="Lock status">${svgIcon(ICONS.lock)}<span class="lb">Unavailable</span></button>
     <button class="abtn" id="aStart">${svgIcon(ICONS.power)}<span class="lb">Start</span></button>
     <button class="abtn" id="aVent">${svgIcon(ICONS.vent)}<span class="lb">Vent</span></button>
-    ${car.show_sentry ? `<button class="abtn" id="aSentry">${svgIcon(ICONS.sentry)}<span class="lb">Sentry</span></button>` : ""}
+    <button class="abtn" id="aSentry">${svgIcon(ICONS.sentry)}<span class="lb">Sentry</span></button>
   </div>
 
   <div class="rows">
     <div class="row" id="rowClim">
-      <button class="rowHead" id="headClim">${svgIcon(ICONS.fan, "ric")}
+      <button class="rowHead" id="headClim">${svgIcon(ICONS.fan, "ric climFan")}
         <span><span class="rTitle">Climate</span><div class="rSub" id="climSub">-</div></span>
         ${svgIcon(ICONS.chevR, "chev")}</button>
 
@@ -2118,10 +2455,6 @@
         </div>
       </div>
     </div>
-    <div class="row" id="rowLoc">
-      <button class="rowHead" id="headLoc">${svgIcon(ICONS.pin, "ric")}
-        <span><span class="rTitle">Location</span><div class="rSub" id="locSub">-</div></span>
-        ${svgIcon(ICONS.chevR, "chev")}</button>
     </div>
   </div>
 
@@ -2141,12 +2474,66 @@
         carHtml += '<button class="backBtn mapBack" id="ctlBack" title="Back to ' +
           esc(car.name || "the car") + '">' +
           '<span class="bch">\u2039</span>Back</button>';
-      else if ((this._view === "ctl" && this._img("image_side")) || this._view === "clim")
+      else if (this._view === "ctl" && this._img("image_side"))
         carHtml += '<button class="backBtn" id="ctlBack" title="Back">\u2039</button>';
       this.shadowRoot.getElementById("carBox").innerHTML = carHtml;
+      requestAnimationFrame(() => this._positionRestFrunkHit());
+
+      if (this._view === "clim") {
+        const climateBack = this.shadowRoot.getElementById("ctlBack");
+        const cardRoot = this.shadowRoot.querySelector("ha-card");
+        if (climateBack && cardRoot) cardRoot.appendChild(climateBack);
+      }
+      this.shadowRoot.querySelectorAll("img").forEach((img) => {
+        img.addEventListener("load", () => requestAnimationFrame(() => { this._positionRestFrunkHit(); this._positionClimateLayout(); this._updateClimateCable(); }));
+        img.addEventListener("error", () => {
+          const failedSrc = img.currentSrc || img.src;
+          if (/\.png(?:[?#]|$)/i.test(failedSrc)) {
+            img.src = failedSrc.replace(/\.png(?=([?#]|$))/i, ".jpg");
+          } else if (/climate3\.jpg(?:[?#]|$)/i.test(failedSrc)) {
+            const base = this._imgBase();
+            if (base) img.src = base.replace(/\/$/, "") + "/climate.png?v=1";
+          }
+        });
+      });
+      const climateImg = this.shadowRoot.querySelector(".climWrap img.climImg");
       this._buildCarMenu();
       this._wire();
       if (this._view === "map") this._mountMap();
+      const ci = this._img("image_climate");
+      if (ci) this._carBox(ci, "Clim");
+      if (ci && this._climPreloadUrl !== ci) {
+        this._climPreloadUrl = ci;
+        this._climPreloaded = false;
+        this._climPreloadSettled = false;
+        const loadImage = (src) => new Promise((resolve) => {
+          const pimg = new Image();
+          let finished = false;
+          const finish = (ok) => { if (finished) return; finished = true; resolve(ok); };
+          pimg.onload = () => {
+            if (typeof pimg.decode === "function") pimg.decode().then(() => finish(true), () => finish(true));
+            else finish(true);
+          };
+          pimg.onerror = () => finish(false);
+          pimg.src = src;
+          if (pimg.complete) queueMicrotask(() => finish(pimg.naturalWidth > 0));
+        });
+        this._climPreloadPromise = (async () => {
+          let ready = await loadImage(ci);
+          if (!ready && /climate3\.(?:jpg|png)(?:\?|$)/.test(ci) && this._imgBase()) {
+            const base = this._imgBase().replace(/\/$/, "");
+            const fallbacks = [ci.replace(/\.png(?=([?#]|$))/i, ".jpg"), base + "/climate.png?v=1", base + "/climate.jpg?v=1"];
+            for (const fallback of fallbacks) {
+              if (fallback === ci) continue;
+              ready = await loadImage(fallback);
+              if (ready) break;
+            }
+          }
+          this._climPreloaded = ready;
+          this._climPreloadSettled = true;
+          return ready;
+        })();
+      }
     }
 
     _wire() {
@@ -2165,58 +2552,111 @@
         setTimeout(() => { const b = q("btnRefresh"); if (b) b.classList.remove("spin"); }, 4000);
       });
 
-      // action row
-      q("aFlash").addEventListener("click", () =>
-        this._call("button", "press", { entity_id: this._car._entities.flash }));
+      // action row: require a second tap before sending car commands.
+      q("aFlash").addEventListener("click", () => {
+        if (this._confirm("flash", q("aFlash"), "Flash")) {
+          this._call("button", "press", { entity_id: this._car._entities.flash });
+          this._playFlashEffect();
+        }
+      });
       q("aHonk").addEventListener("click", () => {
-        if (this._confirm("honk", q("aHonk"), "Honk"))
+        if (this._confirm("honk", q("aHonk"), "Honk")) {
           this._call("button", "press", { entity_id: this._car._entities.horn });
+          this._playHornEffect();
+        }
       });
       q("aStart").addEventListener("click", () => {
-        if (this._confirm("start", q("aStart"), "Start"))
-          this._call("button", "press", { entity_id: this._car._entities.remote_start });
+        if (this._confirm("start", q("aStart"), "Start")) this._call("button", "press", { entity_id: this._car._entities.remote_start });
       });
       q("aVent").addEventListener("click", () => {
-        if (this._confirm("vent", q("aVent"), "Vent")) this._toggleCover("windows_cover");
+        if (this._confirm("vent", q("aVent"), "Vent")) this._setWindowsVent();
       });
-      q("aPort").addEventListener("click", () => this._toggleCover("charge_port"));
-      const aSen = q("aSentry");
-      if (aSen) aSen.addEventListener("click", () => {
-        const s = this._st("sentry");
-        if (!s) return;
-        /* blocked: send nothing, and answer the tap with the reason */
-        const why = this._sentryBlocked();
-        if (why) {
-          const lb = aSen.querySelector(".lb");
-          if (lb && why === "driving") {
-            lb.textContent = "Park first";
-            clearTimeout(this._sentryWhyT);
-            this._sentryWhyT = setTimeout(() => { this._sentryWhyT = null; if (this._hass) this._update(); }, 2500);
-          }
-          return;
-        }
-        /* a quick extra tap straight after a command must not undo it: the
-           button has just changed state under the finger, so for a moment
-           another tap is far more likely a double tap than a decision */
-        if (Date.now() - (this._sentryAt || 0) < 3000) return;
-        const on = this._sentryOn();
-        if (on && !this._confirm("sentry", aSen, "Sentry")) return;
-        this._sentryAt = Date.now();
-        this._call("switch", on ? "turn_off" : "turn_on", { entity_id: s.entity_id });
-        this._setPend("sentry", !on);
+      q("aPort").addEventListener("click", () => {
+        if (this._confirm("port", q("aPort"), "Port")) this._toggleCover("charge_port");
+      });
+      q("aSentry").addEventListener("click", () => {
+        if (!this._confirm("sentry", q("aSentry"), "Sentry")) return;
+        const sentry = this._st("sentry");
+        if (sentry) this._call("switch", sentry.state === "on" ? "turn_off" : "turn_on", { entity_id: sentry.entity_id });
       });
 
-      // resting <-> controls view
-      const restW = q("restWrap");
-      if (restW) restW.addEventListener("click", () => this._setView("ctl"));
+      q("aLock").addEventListener("click", () => {
+        const btn = q("aLock");
+        const currentState = this._is("lock", "locked") ? "locked"
+          : this._is("lock", "unlocked") ? "unlocked" : "";
+        if (!currentState) return;
+        if (!this._arm.mainLock) {
+          this._arm.mainLock = true;
+          this._arm.mainLockState = currentState;
+          btn.classList.add("armed");
+          btn.querySelector(".lb").textContent = currentState === "locked" ? "Unlock?" : "Lock?";
+          btn.setAttribute("aria-label", currentState === "locked" ? "Unlock?" : "Lock?");
+          clearTimeout(this._armT.mainLock);
+          this._armT.mainLock = setTimeout(() => {
+            this._arm.mainLock = false;
+            delete this._arm.mainLockState;
+            btn.classList.remove("armed");
+            this._update();
+          }, 3000);
+          return;
+        }
+        const confirmed = this._is("lock", this._arm.mainLockState);
+        this._arm.mainLock = false;
+        delete this._arm.mainLockState;
+        clearTimeout(this._armT.mainLock);
+        btn.classList.remove("armed");
+        if (confirmed) this._toggleLock();
+        else this._update();
+      });
+
+      // resting view (no longer navigates to top-down)
+      if (this._view === "clim") requestAnimationFrame(() => { this._positionClimateLayout(); this._placeBack(); this._updateClimateCable(); });
       const backB = q("ctlBack");
       if (backB) backB.addEventListener("click", () => this._setView(""));
 
-      // on-car taps
+      // rest overlay buttons (frunk/trunk/lock on side image)
+      const rFrunkHit = this.shadowRoot.getElementById("restFrunkHitButton");
+      const rFrunk = this.shadowRoot.getElementById("restFrunkBtn");
+      const handleRestFrunkClick = (e) => {
+        e.stopPropagation();
+        const lbl = this.shadowRoot.getElementById("restFrunkLbl");
+        if (!this._arm.rfrunk) {
+          this._arm.rfrunk = true;
+          if (rFrunk) rFrunk.classList.add("armed");
+          if (lbl) lbl.textContent = "Tap again";
+          clearTimeout(this._armT.rfrunk);
+          this._armT.rfrunk = setTimeout(() => { this._arm.rfrunk = false; if (rFrunk) rFrunk.classList.remove("armed"); this._update(); }, 3000);
+          return;
+        }
+        this._arm.rfrunk = false;
+        if (rFrunk) rFrunk.classList.remove("armed");
+        clearTimeout(this._armT.rfrunk);
+        this._toggleCover("frunk");
+      };
+      if (rFrunk) rFrunk.addEventListener("click", handleRestFrunkClick);
+      if (rFrunkHit) rFrunkHit.addEventListener("click", handleRestFrunkClick);
+      const rTrunk = this.shadowRoot.getElementById("restTrunkBtn");
+      if (rTrunk) rTrunk.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (this._car.force_trunk_open === true) return;
+        const lbl = this.shadowRoot.getElementById("restTrunkLbl");
+        if (!this._arm.rtrunk) {
+          this._arm.rtrunk = true; rTrunk.classList.add("armed");
+          if (lbl) lbl.textContent = "Tap again";
+          clearTimeout(this._armT.rtrunk);
+          this._armT.rtrunk = setTimeout(() => { this._arm.rtrunk = false; rTrunk.classList.remove("armed"); this._update(); }, 3000);
+          return;
+        }
+        this._arm.rtrunk = false; rTrunk.classList.remove("armed"); clearTimeout(this._armT.rtrunk);
+        this._toggleCover("trunk");
+      });
+
+      // on-car taps (top-down view, still used when no side image exists)
       const frunkG = this.shadowRoot.getElementById("frunkTap");
       const trunkG = this.shadowRoot.getElementById("trunkTap");
-      const lockG = this.shadowRoot.getElementById("lockTap");
+
       if (frunkG) frunkG.addEventListener("click", () => {
+        if (this._car.force_frunk_open === true) return;
         const lbl = this.shadowRoot.getElementById("frunkLbl");
         if (!this._arm.frunk) {
           this._arm.frunk = true; frunkG.classList.add("armed");
@@ -2229,6 +2669,7 @@
         this._toggleCover("frunk");
       });
       if (trunkG) trunkG.addEventListener("click", () => {
+        if (this._car.force_trunk_open === true) return;
         const lbl = this.shadowRoot.getElementById("trunkLbl");
         if (!this._arm.trunk) {
           this._arm.trunk = true; trunkG.classList.add("armed");
@@ -2240,7 +2681,6 @@
         this._arm.trunk = false; trunkG.classList.remove("armed"); clearTimeout(this._armT.trunk);
         this._toggleCover("trunk");
       });
-      if (lockG) lockG.addEventListener("click", () => this._toggleLock());
 
       // rows
       const toggleRow = (rowId) => {
@@ -2250,19 +2690,13 @@
       };
       q("headClim").addEventListener("click", () => this._setView("clim"));
       q("headChg").addEventListener("click", () => toggleRow("rowChg"));
-      /* location_tap: "map" (default) opens the in-card map, "more-info" keeps
-         the dialog this row used to open. */
-      q("headLoc").addEventListener("click", () =>
-        String((this._car.location_tap || (this._config && this._config.location_tap) ||
-                "map")).toLowerCase() === "more-info"
-          ? this._moreInfo("location")
-          : this._setView("map"));
+      // Location row removed
 
       // climate controls
       const cpwr = q("climPwr");
       if (cpwr) cpwr.addEventListener("click", (e) => { e.stopPropagation(); this._toggleClimate(); });
       const cvent = q("climVent");
-      if (cvent) cvent.addEventListener("click", () => this._toggleCover("windows_cover"));
+      if (cvent) cvent.addEventListener("click", () => this._setWindowsVent());
       // no rear-centre seat heater in any Tesla - seatRC removed globally (Nick, 2026-08-31)
       const SEATS = [["seatFL","seat_fl"],["seatFR","seat_fr"],["seatRL","seat_rl"],["seatRR","seat_rr"]];
       const AP = this._climAnchors();
@@ -2415,6 +2849,7 @@
       };
       q("cLim").addEventListener("pointerdown", () => { this._limDrag = true; });
       q("cLim").addEventListener("change", (e) => {
+        if (this._car.force_plugged === true) return;
         this._limDrag = false;
         const v = snapLim(+e.target.value);
         e.target.value = v;
@@ -2427,14 +2862,29 @@
       });
       q("ampUp").addEventListener("click", () => this._bumpAmps(1));
       const stopB = q("btnStopChg");
-      if (stopB) stopB.addEventListener("click", () =>
-        this._call("switch", "turn_off", { entity_id: this._car._entities.charger_switch }));
+      if (stopB) stopB.addEventListener("click", () => {
+        if (this._car.force_plugged === true) return;
+        this._call("switch", "turn_off", { entity_id: this._car._entities.charger_switch });
+      });
       const unlockB = q("btnUnlockPort");
       if (unlockB) unlockB.addEventListener("click", () => {
-        const s = this._st("charge_port");
-        if (!s) return;
-        this._call("cover", unlockB.dataset.mode === "close" ? "close_cover" : "open_cover",
-          { entity_id: s.entity_id });
+        if (this._car.force_plugged === true) return;
+        const closing = unlockB.dataset.mode === "close";
+        const cableLock = closing ? null : this._st("charge_cable_lock");
+        const portCover = this._st("charge_port");
+        const target = closing ? portCover : (cableLock || portCover);
+        if (!target) return;
+        const title = closing ? "Close Charge Port" : "Unlock Charge Port";
+        const prompt = closing ? "Close?" : "Unlock?";
+        const confirmKey = closing ? "closeChargePort" : "unlockChargePort";
+        if (!this._confirm(confirmKey, unlockB, title, prompt)) return;
+        if (closing) {
+          this._call("cover", "close_cover", { entity_id: target.entity_id });
+        } else if (cableLock) {
+          this._call("lock", "unlock", { entity_id: target.entity_id });
+        } else {
+          this._call("cover", "open_cover", { entity_id: target.entity_id });
+        }
       });
       q("ampDn").addEventListener("click", () => this._bumpAmps(-1));
 
@@ -2488,6 +2938,7 @@
     }
 
     _bumpAmps(d) {
+      if (this._car.force_plugged === true) return;
       const s = this._st("charging_amps");
       if (!s) return;
       const min = s.attributes.min || 5, max = s.attributes.max || 32;
@@ -2503,7 +2954,13 @@
     _toggleLock() {
       const s = this._st("lock");
       if (!s) return;
-      this._call("lock", s.state === "locked" ? "unlock" : "lock", { entity_id: s.entity_id });
+      const locked = this._is("lock", "locked");
+      const targetState = locked ? "unlocked" : "locked";
+      this._call("lock", locked ? "unlock" : "lock", { entity_id: s.entity_id });
+      if (!this._opt) this._opt = {};
+      this._opt["lock"] = { state: targetState, expires: Date.now() + 5000 };
+      setTimeout(() => this._update(), 5000);
+      this._update();
     }
     /* Switching the climate off ends defrost in the app. Dropping our
        assumption isn't enough: the real preset_mode still reads "defrost" for a
@@ -2539,9 +2996,61 @@
       return !!s && s.state !== "off" && s.state !== "unavailable";
     }
     _toggleCover(key) {
+      if ((key === "trunk" && this._car.force_trunk_open === true) ||
+          (key === "charge_port" && this._car.force_plugged === true)) return;
       const s = this._st(key);
       if (!s) return;
+      const targetState = s.state === "open" ? "closed" : "open";
       this._call("cover", s.state === "open" ? "close_cover" : "open_cover", { entity_id: s.entity_id });
+      if (!this._opt) this._opt = {};
+      this._opt[key] = { state: targetState, expires: Date.now() + 5000 };
+      setTimeout(() => this._update(), 5000);
+      this._update();
+    }
+
+    _setWindowsVent() {
+      const cover = this._st("windows_cover");
+      if (cover) this._call("cover", "open_cover", { entity_id: cover.entity_id });
+      if (!this._opt) this._opt = {};
+      this._opt.windows_cover = { state: "open", expires: Date.now() + 15000 };
+      this._update();
+    }
+
+    _flashEffectAllowed() {
+      if (this._visualPlugged() || this._charging() || this._forceDriveAnim()) return false;
+      const shiftState = String((this._st("shift") || {}).state || "").trim().toLowerCase();
+      if (["d", "r", "n", "drive", "reverse", "neutral"].includes(shiftState) || this._lunaShiftDriving()) return false;
+      const speedEntity = (this._car.speed_entity && this._hass && this._hass.states[this._car.speed_entity]) || this._st("speed");
+      const reportedSpeed = speedEntity ? parseFloat(speedEntity.state) : NaN;
+      return (Number(this._speedKph()) || 0) <= 1 && !(Number.isFinite(reportedSpeed) && reportedSpeed > 1);
+    }
+    _playFlashEffect() {
+      if (!this._flashEffectAllowed()) return;
+      this._flashUntil = Date.now() + 2000;
+      const headlights = this.shadowRoot && this.shadowRoot.getElementById("headlights");
+      if (headlights) headlights.style.display = "";
+      clearTimeout(this._flashTimer);
+      this._flashTimer = setTimeout(() => { this._flashUntil = 0; this._flashTimer = null; this._update(); }, 2000);
+    }
+
+    _playHornEffect() {
+      const ripple = this.shadowRoot && this.shadowRoot.getElementById("hornRipple");
+      if (!ripple) return;
+      ripple.style.display = "";
+      ripple.querySelectorAll("animate").forEach((animation) => { try { animation.beginElement(); } catch (_) {} });
+      clearTimeout(this._hornTimer);
+      this._hornTimer = setTimeout(() => { ripple.style.display = "none"; this._hornTimer = null; }, 1800);
+    }
+
+    _lunaShiftDriving() {
+      const shift = this._st("shift");
+      if (!shift || shift.entity_id !== "sensor.luna_lupa_shift_state") return false;
+      const state = String(shift.state || "").trim().toLowerCase();
+      return state !== "p" && state !== "park" && state !== "unavailable" && state !== "unknown";
+    }
+
+    _forceDriveAnim() {
+      return this._car.force_drive_anim === true || this._lunaShiftDriving();
     }
 
     _resting() {
@@ -2552,8 +3061,10 @@
     }
 
     _carRest() {
-      const chg = this._hass ? this._charging() : false;
-      const plg = this._hass ? this._plugged() : false;
+      const car = this._car;
+      const forceDrive = this._forceDriveAnim();
+      const chg = !forceDrive && this._hass ? this._charging() : false;
+      const plg = !forceDrive && this._visualPlugged();
       const src = (chg && this._img("image_charging")) ||
                   (plg && (this._img("image_side_plugged") || this._img("image_charging"))) ||
                   this._img("image_side");
@@ -2566,81 +3077,688 @@
       // Baked pack photos already show the cable (green while charging) -
       // no overlay at all. The drawn overlay exists only for users whose own
       // photos have no cable in them.
+      let RA = this._car.rest_anchors || {};
+      let defF = [35, 38, 35, 18], defT = [215, 60, 215, 40];
+      if (rSfx === "Rest") {
+        RA = this._car.rest_anchors_unplugged || RA;
+        defF = [70, 75, 70, 55];
+        defT = [200, 30, 200, 10];
+      }
+      const fA = anchor(RA, "frunk", defF);
+      const fkx = fA[0], fky = fA[1], ftx = fA.length > 2 ? fA[2] : fA[0], fty = fA.length > 2 ? fA[3] : fA[1] - 20;
+      const tA = anchor(RA, "trunk", defT);
+      const tkx = tA[0], tky = tA[1], ttx = tA.length > 2 ? tA[2] : tA[0], tty = tA.length > 2 ? tA[3] : tA[1] - 20;
+
+      const cA = RA.charger || null;
+      let chargerBtn = "";
+
+      const restHotspots = `
+  <svg class="car ovl restHotspotsOverlay" id="restHotspotsOvl" viewBox="0 0 233 108" style="pointer-events:none">
+    <g class="restOvlBtn" id="restFrunkBtn" style="pointer-events:auto">
+      <line x1="${fkx}" y1="${fky}" x2="${ftx}" y2="${fty}" />
+      <circle class="rDot" cx="${fkx}" cy="${fky}" />
+      <text id="restFrunkLbl" class="rLbl" x="${ftx}" y="${fty - 3}" text-anchor="middle">Frunk</text>
+      <rect id="restFrunkHitBounds" x="${ftx - 15}" y="${fty - 15}" width="30" height="20" fill="transparent" />
+    </g>
+    <g class="restOvlBtn" id="restTrunkBtn" style="pointer-events:auto">
+      <line x1="${tkx}" y1="${tky}" x2="${ttx}" y2="${tty}" />
+      <circle class="rDot" cx="${tkx}" cy="${tky}" />
+      <text id="restTrunkLbl" class="rLbl" x="${ttx}" y="${tty - 3}" text-anchor="middle">Trunk</text>
+      <rect x="${ttx - 15}" y="${tty - 15}" width="30" height="20" fill="transparent" />
+    </g>
+
+    ${chargerBtn}
+  </svg>
+  </svg>`;
+
+      const pxy = this._portXY("port_xy");
+      const [px, py] = pxy.split(",").map(Number);
+      const cable = this._car.cable_path ||
+        `M ${px - 43} 108 C ${px - 19} 103 ${px - 7} 76 ${px} ${py + 1}`;
+      const boltPath = baked ? (this._bakedCablePath() || cable) : cable;
+      const cableEndMatch = String(boltPath).match(/(-?(?:\d+\.?\d*|\.\d+))\s+(-?(?:\d+\.?\d*|\.\d+))\s*$/);
+      const cableEndX = cableEndMatch ? Number(cableEndMatch[1]) : px;
+      const cableEndY = cableEndMatch ? Number(cableEndMatch[2]) : py + 1;
+      const boltPathD = `M ${cableEndX - 4} ${cableEndY - 12} l -3.5 5 h 2.5 l -1.5 5.5 5.5 -8 h -3 l 1.5 -2.5 z`;
+      const box = this._carBox(src, rSfx);
+      const lPos = this._car.lights || null;
+      const lLeds = this._car.light_leds || [];
+      let lightsArr = [];
+      if (lPos && Array.isArray(lPos) && lPos.length > 0) {
+        if (Array.isArray(lPos[0])) lightsArr = lPos;
+        else lightsArr = [lPos];
+      } else {
+        const lx = box && box.length === 4 ? box[0] + (box[2]-box[0])*0.1 : 25;
+        const ly = box && box.length === 4 ? box[1] + (box[3]-box[1])*0.65 : 72;
+        lightsArr = [[lx, ly]];
+      }
+      let ledsArr = [];
+      if (lLeds && Array.isArray(lLeds) && lLeds.length > 0) {
+        if (Array.isArray(lLeds[0])) ledsArr = lLeds;
+        else ledsArr = [lLeds];
+      }
+      const ledLines = ledsArr.filter((l) => Array.isArray(l) && l.length >= 4 && l.slice(0, 4).every((n) => Number.isFinite(Number(n))) && Number(l[0]) >= 0 && Number(l[0]) <= 233 && Number(l[2]) >= 0 && Number(l[2]) <= 233 && Number(l[1]) >= 0 && Number(l[1]) <= 108 && Number(l[3]) >= 0 && Number(l[3]) <= 108 && Number(l[4] || 1.5) <= 8);
+      const dayConfig = Array.isArray(car.daylight_points) ? car.daylight_points : [];
+      const dayPointSets = dayConfig.length && Array.isArray(dayConfig[0]) && Array.isArray(dayConfig[0][0]) ? dayConfig : [dayConfig];
+      let ledPaths = dayPointSets.map((points) => {
+        const p = points.filter((pt) => Array.isArray(pt) && pt.length >= 2 && Number.isFinite(Number(pt[0])) && Number.isFinite(Number(pt[1])) && Number(pt[0]) >= 0 && Number(pt[0]) <= 233 && Number(pt[1]) >= 0 && Number(pt[1]) <= 108);
+        if (p.length < 2) return null;
+        let d = `M ${p[0][0]} ${p[0][1]} `;
+        for (let i = 1; i < p.length - 1; i++) {
+          const xc = (Number(p[i][0]) + Number(p[i + 1][0])) / 2;
+          const yc = (Number(p[i][1]) + Number(p[i + 1][1])) / 2;
+          d += `Q ${p[i][0]} ${p[i][1]} ${xc} ${yc} `;
+        }
+        const last = p[p.length - 1];
+        d += p.length > 2 ? `L ${last[0]} ${last[1]}` : `L ${p[1][0]} ${p[1][1]}`;
+        return d;
+      }).filter(Boolean);
+      if (!ledPaths.length) {
+        ledPaths = ledLines.length ? ledLines.map((l) => `M ${l[0]} ${l[1]} L ${l[2]} ${l[3]}`) : ["M 49 78 C 58 76 68 73 79 73", "M 2 57 C 6 60 10 63 12 65"];
+      }
+            const ledWidth = Math.max(0.2, Math.min(8, Number(car.daylight_thickness) || 1.15));
+      const ledIntensity = Math.max(0, Math.min(1, Number.isFinite(Number(car.daylight_intensity)) ? Number(car.daylight_intensity) : 0.9));
+      const ledCustomSvg = ledPaths.map((d) => `<path d="${d}" fill="none" stroke="#dceaff" stroke-width="${ledWidth * 3.2}" stroke-linecap="round" stroke-linejoin="round" opacity="${ledIntensity * 0.26}" filter="url(#headlightSoft)"/><path d="${d}" fill="none" stroke="#f4f8ff" stroke-width="${ledWidth}" stroke-linecap="round" stroke-linejoin="round" opacity="${ledIntensity}"/>`).join("");
+      const starSize = Math.max(0.2, Math.min(12, Number(car.light_star_size) || 3.2));
+      const starIntensity = Math.max(0, Math.min(1, Number.isFinite(Number(car.light_star_intensity)) ? Number(car.light_star_intensity) : 0.9));
+      const spotWidth = Math.max(0.2, Math.min(20, Number(car.light_spot_width) || 2.8));
+      const spotHeight = Math.max(0.2, Math.min(12, Number(car.light_spot_height) || 1.4));
+      const spotIntensity = Math.max(0, Math.min(1, Number.isFinite(Number(car.light_spot_intensity)) ? Number(car.light_spot_intensity) : 0.82));
+      const [frunkFxX, frunkFxY] = fA;
+      const interactiveFxSvg = `
+        <g id="hornRipple" style="display:none;pointer-events:none" fill="none" stroke="#f4f7ff" stroke-width="1.1">
+          <circle cx="${frunkFxX}" cy="${frunkFxY}" r="1" opacity="0"><animate attributeName="r" from="1" to="11" dur=".8s" begin="indefinite"/><animate attributeName="opacity" values=".95;0" dur=".8s" begin="indefinite"/></circle>
+          <circle cx="${frunkFxX}" cy="${frunkFxY}" r="1" opacity="0"><animate attributeName="r" from="1" to="11" dur=".8s" begin="indefinite"/><animate attributeName="opacity" values=".8;0" dur=".8s" begin="indefinite"/></circle>
+        </g>`;
+      const headlightSvg = `<g id="headlights" style="display:${forceDrive ? '' : 'none'}">
+        ${lightsArr.map((l) => {
+          const x = Number(l[0]), y = Number(l[1]);
+          if (!Number.isFinite(x) || !Number.isFinite(y)) return "";
+          const defaultAngle = Number.isFinite(Number(car.light_angle)) ? Number(car.light_angle) : 28;
+          const angle = Number.isFinite(Number(l[3])) ? Number(l[3]) : defaultAngle;
+          const wrappedAngle = ((angle % 360) + 360) % 360;
+          const angleRad = (wrappedAngle > 180 ? wrappedAngle - 360 : wrappedAngle) * Math.PI / 180;
+          const len = Math.max(8, Math.min(360, Number(l[4]) || Number(car.light_beam_length) || 82));
+          const half = Math.max(1, Math.min(120, Number(l[5]) || Number(car.light_beam_width) || 16));
+          const sourceW = Math.max(1, Math.min(60, Number(l[6]) || Number(car.light_source_size) || 7));
+          const sourceH = Math.max(0.7, Math.min(36, Number(l[7]) || Number(car.light_source_thickness) || 3.5));
+          // Positive angle points down from the car's forward (left) direction.
+          // Compensate for stretching the overlay over the side photo.
+          const ex = x - len, ey = y + len * Math.tan(angleRad) * 0.765;
+          const nx = Math.sin(angleRad), ny = Math.cos(angleRad) * 0.765;
+          const ox = nx * half, oy = ny * half;
+          const passengerLamp = x < 35;
+          const roadBeam = `<g>
+            <path d="M ${x} ${y} L ${ex+ox} ${ey+oy} Q ${ex-5} ${ey+2} ${ex-ox} ${ey-oy} Z" fill="url(#headlightBeam)" filter="url(#headlightSoft)"/>
+            <ellipse cx="${Math.max(0, ex-5)}" cy="${Math.min(108, ey+2)}" rx="${half*2.7}" ry="${half*0.9}" fill="url(#headlightPool)" filter="url(#headlightSoft)"/>
+          </g>`;
+          const flare = passengerLamp
+            ? `<ellipse cx="${x}" cy="${y}" rx="${Math.max(starSize * 3.2, Math.min(sourceW, starSize * 5.5))}" ry="${Math.max(starSize * 1.7, Math.min(sourceH * 0.65, starSize * 3))}" fill="url(#headlightBloom)" opacity="${starIntensity * 0.92}"/><circle cx="${x}" cy="${y}" r="${starSize * 0.42}" fill="#fffdf2" opacity="${starIntensity}"/><path d="M ${x-starSize} ${y} L ${x+starSize} ${y} M ${x} ${y-starSize*0.88} L ${x} ${y+starSize*0.88}" stroke="#fff5d9" stroke-width="${Math.max(0.25, starSize * 0.2)}" stroke-linecap="round" opacity="${starIntensity}"/>`
+            : `<ellipse cx="${x}" cy="${y}" rx="${spotWidth * 2.3}" ry="${spotHeight * 2.2}" fill="url(#headlightBloom)" filter="url(#headlightSoft)" opacity="${spotIntensity * 0.36}"/><ellipse cx="${x}" cy="${y}" rx="${spotWidth}" ry="${spotHeight}" fill="#fff4d7" filter="url(#headlightSoft)" opacity="${spotIntensity * 0.72}"/><ellipse cx="${x}" cy="${y}" rx="${spotWidth * 0.56}" ry="${spotHeight * 0.56}" fill="#fffdf5" opacity="${spotIntensity}"/>`;
+          return `${roadBeam}${flare}`;
+        }).join("")}
+      </g><g id="daylights" style="display:${forceDrive ? '' : 'none'}">${ledCustomSvg}</g>`;
       if (baked) {
         /* The photo already has the cable, so draw no cable -- only the green
            dashes travelling along it while charging. Restores v1.0.0; v1.0.1
            dropped the whole overlay and took the animation with it. */
         const bakedPath = this._bakedCablePath();
+        const cw = this._car.cable_thickness || 1.05;
+        const gw = this._car.cable_thickness ? this._car.cable_thickness * 2.8 : 3;
         /* Softer than the drawn-cable green and slightly narrower, with a blurred
            edge: this rides on a photograph, so a hard bright line reads as a
            sticker laid over the picture rather than current moving along it. */
         const bakedDash = bakedPath ? `
   <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       style="display:none;pointer-events:none">
+       style="display:none;pointer-events:none;left:0;bottom:0;width:100%;height:100%;aspect-ratio:auto;overflow:visible">
     <defs>
       <filter id="cableSoft" x="-40%" y="-40%" width="180%" height="180%">
         <feGaussianBlur stdDeviation="0.55"/>
       </filter>
     </defs>
     <path id="restCableDash" d="${bakedPath}" pathLength="100" stroke="#48865f" stroke-opacity=".58"
-          stroke-width="1.05" fill="none" stroke-linecap="round" stroke-dasharray="28 72"
+          stroke-width="${cw}" fill="none" stroke-linecap="round" stroke-dasharray="12 38"
           filter="url(#cableSoft)">
-      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.5s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.8s" repeatCount="indefinite"/>
     </path>
+    <path id="restCableGlow" d="${bakedPath}" pathLength="100" stroke="#4fd07a" stroke-opacity=".6" stroke-width="${gw}" fill="none"
+          stroke-linecap="round" stroke-dasharray="12 38" filter="url(#cableSoft)" style="display:none">
+      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values=".3;.7;.3" dur="2s" repeatCount="indefinite"/>
+    </path>
+    <path id="restCableBolt" d="${boltPathD}" fill="#4fd07a" style="display:none"/>
   </svg>` : "";
         return `
-<div class="imgWrap rest" id="restWrap" title="Open controls">
-  <img id="restImg" class="carImg" src="${src}" alt="">
-  <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none"></svg>
-  <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
+<div class="imgWrap rest" id="restWrap">
+  <img id="restImg" class="carImg" src="${src}" data-basesrc="${src}" alt="">
+  <svg class="car ovl" id="driveOvl" viewBox="-50 0 283 108" preserveAspectRatio="none"
+       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none;overflow:visible;left:-21.46%;width:121.46%;height:100%;aspect-ratio:auto"></svg>
+  <svg class="car ovl" id="restGlowOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none;left:0;bottom:0;width:100%;height:100%;aspect-ratio:auto;overflow:visible"><defs><linearGradient id="headlightBeam" x1="100%" y1="0%" x2="0%" y2="0%"><stop offset="0%" stop-color="#fff5dc" stop-opacity="0.38"/><stop offset="55%" stop-color="#e8f2ff" stop-opacity="0.12"/><stop offset="100%" stop-color="#e8f2ff" stop-opacity="0"/></linearGradient><radialGradient id="headlightBloom"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.8"/><stop offset="38%" stop-color="#fff4d5" stop-opacity="0.4"/><stop offset="100%" stop-color="#fff4d5" stop-opacity="0"/></radialGradient><radialGradient id="headlightPool"><stop offset="0%" stop-color="#fff3d1" stop-opacity="0.22"/><stop offset="45%" stop-color="#f5efd9" stop-opacity="0.09"/><stop offset="100%" stop-color="#f5efd9" stop-opacity="0"/></radialGradient><filter id="headlightSoft" x="-30%" y="-40%" width="170%" height="190%"><feGaussianBlur stdDeviation="2.2"/></filter></defs>
     <defs>${dfDefs(rSfx, this._car)}</defs>
-    ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
-  </svg>${bakedDash}
-  <button class="ctlBtn" id="ctlOpen">Controls</button>
+    ${dfGlow(rSfx, this._car, null, box)}
+    ${headlightSvg}${interactiveFxSvg}
+  </svg>${bakedDash}${restHotspots}
 </div>`;
       }
-      const pxy = this._portXY("port_xy");
-      const [px, py] = pxy.split(",").map(Number);
-      const cable = this._car.cable_path ||
-        `M ${px - 43} 108 C ${px - 19} 103 ${px - 7} 76 ${px} ${py + 1}`;
       return `
-<div class="imgWrap rest" id="restWrap" title="Open controls">
-  <img id="restImg" class="carImg" src="${src}" alt="">
-  <svg class="car ovl" id="driveOvl" viewBox="0 0 233 108" preserveAspectRatio="none"
-       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none"></svg>
-  <svg class="car ovl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none">
-    <defs>${dfDefs(rSfx, this._car)}</defs>
-    ${dfGlow(rSfx, this._car, null, this._carBox(src, rSfx))}
+<div class="imgWrap rest" id="restWrap">
+  <img id="restImg" class="carImg" src="${src}" data-basesrc="${src}" alt="">
+  <svg class="car ovl" id="driveOvl" viewBox="-50 0 283 108" preserveAspectRatio="none"
+       data-src="${src}" data-sfx="${rSfx}" style="display:none;pointer-events:none;overflow:visible;left:-21.46%;width:121.46%;height:100%;aspect-ratio:auto"></svg>
+  <svg class="car ovl" id="restGlowOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="pointer-events:none;left:0;bottom:0;width:100%;height:100%;aspect-ratio:auto;overflow:visible">
+    <defs>
+      ${dfDefs(rSfx, this._car)}
+
+      <linearGradient id="headlightBeam" x1="100%" y1="0%" x2="0%" y2="0%"><stop offset="0%" stop-color="#fff5dc" stop-opacity="0.38"/><stop offset="55%" stop-color="#e8f2ff" stop-opacity="0.12"/><stop offset="100%" stop-color="#e8f2ff" stop-opacity="0"/></linearGradient>
+      <radialGradient id="headlightBloom"><stop offset="0%" stop-color="#ffffff" stop-opacity="0.8"/><stop offset="38%" stop-color="#fff4d5" stop-opacity="0.4"/><stop offset="100%" stop-color="#fff4d5" stop-opacity="0"/></radialGradient><radialGradient id="headlightPool"><stop offset="0%" stop-color="#fff3d1" stop-opacity="0.22"/><stop offset="45%" stop-color="#f5efd9" stop-opacity="0.09"/><stop offset="100%" stop-color="#f5efd9" stop-opacity="0"/></radialGradient>
+      <filter id="headlightSoft" x="-30%" y="-40%" width="170%" height="190%"><feGaussianBlur stdDeviation="2.2"/></filter>
+      <radialGradient id="lightDotG" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#ffffff" stop-opacity="1"/>
+        <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+      </radialGradient>
+      <radialGradient id="lightGlimG" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#e8d87a" stop-opacity="0.7"/>
+        <stop offset="100%" stop-color="#e8d87a" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+    ${dfGlow(rSfx, this._car, null, box)}
+    ${headlightSvg}${interactiveFxSvg}
   </svg>
-  <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="display:none">
+  <svg class="car ovl" id="restChgOvl" viewBox="0 0 233 108" preserveAspectRatio="none" style="display:none;left:0;bottom:0;width:100%;height:100%;aspect-ratio:auto;overflow:visible">
+    <defs>
+      <filter id="energyGlow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="2.5"/></filter>
+    </defs>
     <path id="restCable" d="${cable}" stroke="#3f6db5" stroke-width="2.6" fill="none" stroke-linecap="round"/>
     <path id="restCableDash" d="${cable}" pathLength="100" stroke="#3aa869" stroke-opacity=".85" stroke-width="1.6" fill="none"
-          stroke-linecap="round" stroke-dasharray="28 72" style="display:none">
-      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.5s" repeatCount="indefinite"/>
+          stroke-linecap="round" stroke-dasharray="12 38" style="display:none">
+      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.8s" repeatCount="indefinite"/>
     </path>
+    <path id="restCableGlow" d="${cable}" pathLength="100" stroke="#4fd07a" stroke-opacity=".6" stroke-width="5" fill="none"
+          stroke-linecap="round" stroke-dasharray="12 38" filter="url(#energyGlow)" style="display:none">
+      <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.8s" repeatCount="indefinite"/>
+      <animate attributeName="stroke-opacity" values=".3;.7;.3" dur="2s" repeatCount="indefinite"/>
+    </path>
+    <path id="restCableBolt" d="${boltPathD}" fill="#4fd07a" style="display:none"/>
     <circle id="restGlow" cx="${px}" cy="${py}" r="2.6" fill="#4fd07a" style="display:none">
       <animate attributeName="opacity" values="1;.45;1" dur="1.5s" repeatCount="indefinite"/>
     </circle>
-  </svg>
-  <button class="ctlBtn" id="ctlOpen">Controls</button>
+  </svg>${restHotspots}
 </div>`;
     }
 
-    _setView(v) {
-      if (this._view === v) return;
-      /* the nested map card holds a reference to hass; let it go with the view
-         so a stale element cannot be fed updates or reused in another view */
-      if (this._view === "map") { this._mapEl = null; this._mapWanted = null; }
-      this._view = v;
-      this._built = false;
-      this._build();
-      this._update();
+    _transitionSnapshot(selector, className, cardRect) {
+      const source = this.shadowRoot && this.shadowRoot.querySelector(selector);
+      if (!source || !cardRect) return null;
+      const rect = source.getBoundingClientRect();
+      const hostRect = this.getBoundingClientRect();
+      const copy = source.cloneNode(true);
+      const animatedProperties = new Set([
+        "animation", "animation-delay", "animation-direction", "animation-duration", "animation-fill-mode",
+        "animation-iteration-count", "animation-name", "animation-play-state", "animation-timing-function",
+        "transition", "transition-delay", "transition-duration", "transition-property", "transition-timing-function",
+        "transform", "transform-origin", "translate", "rotate", "scale", "will-change"
+      ]);
+      /* Only the wrapper and its first two layout levels need frozen computed
+         styles. Deep SVG art keeps its own attributes and embedded stylesheet;
+         walking every path and SMIL node here blocked the click before the fade
+         could even begin (especially when leaving climate with its cable clone). */
+      const freezeLayout = (sourceNode, copyNode, depth) => {
+        const computed = getComputedStyle(sourceNode);
+        for (let i = 0; i < computed.length; i++) {
+          const property = computed[i];
+          if (!animatedProperties.has(property)) copyNode.style.setProperty(property, computed.getPropertyValue(property));
+        }
+        if (depth >= 2) return;
+        Array.from(sourceNode.children).forEach((child, index) => {
+          const childCopy = copyNode.children[index];
+          if (childCopy) freezeLayout(child, childCopy, depth + 1);
+        });
+      };
+      freezeLayout(source, copy, 0);
+
+      if (selector === "#climCableLayer") copy.style.background = "transparent";
+      const idMap = new Map();
+      const prefix = `transition-${Date.now()}-${Math.random().toString(36).slice(2)}-`;
+      const cloneNodes = [copy, ...copy.querySelectorAll("*")];
+      cloneNodes.forEach((el) => {
+        if (!el.id) return;
+        const old = el.id;
+        idMap.set(old, prefix + old);
+        el.id = prefix + old;
+      });
+      cloneNodes.forEach((el) => Array.from(el.attributes).forEach((a) => {
+        const value = a.value
+          .replace(/url\(#([^)]+)\)/g, (match, old) => idMap.has(old) ? `url(#${idMap.get(old)})` : match)
+          .replace(/^#(.+)$/, (match, old) => idMap.has(old) ? `#${idMap.get(old)}` : match);
+        if (value !== a.value) el.setAttribute(a.name, value);
+      }));
+      copy.inert = true;
+      copy.setAttribute("aria-hidden", "true");
+      copy.classList.add("transitionSnapshot", "carDepart", className);
+      Object.assign(copy.style, {
+        left: `${rect.left - hostRect.left}px`, top: `${rect.top - hostRect.top}px`, right: "auto", bottom: "auto",
+        width: `${rect.width}px`, height: `${rect.height}px`, margin: "0", maxWidth: "none", boxSizing: "border-box"
+      });
+      const direction = className === "fromClimate" ? "to_main" : "to_climate";
+      const timing = this._climateTransitionTiming(direction);
+      copy.style.setProperty("--climate-away-duration", `${timing.drive_away}s`);
+      return copy;
     }
 
+
+    _positionRestFrunkHit() {
+      const sr = this.shadowRoot;
+      const button = sr && sr.getElementById("restFrunkHitButton");
+      const stage = sr && sr.getElementById("carStage");
+      const bounds = sr && sr.getElementById("restFrunkHitBounds");
+      if (!button || !stage || !bounds || this._view) {
+        if (button) button.style.display = "none";
+        return;
+      }
+      const overlay = sr.getElementById("restHotspotsOvl");
+      const isMoving = sr.querySelector(".imgWrap.rest.driving");
+      if ((overlay && overlay.classList.contains("restHotspotsPending")) || isMoving || getComputedStyle(bounds).display === "none") {
+        button.style.display = "none";
+        return;
+      }
+      const stageRect = stage.getBoundingClientRect();
+      const hitRect = bounds.getBoundingClientRect();
+      if (!stageRect.width || !hitRect.width || !hitRect.height) {
+        button.style.display = "none";
+        return;
+      }
+      const pad = 8;
+      button.style.left = `${hitRect.left - stageRect.left - pad}px`;
+      button.style.top = `${hitRect.top - stageRect.top - pad}px`;
+      button.style.width = `${hitRect.width + pad * 2}px`;
+      button.style.height = `${hitRect.height + pad * 2}px`;
+      button.style.display = "block";
+      if (!this._restFrunkHitObserver && typeof ResizeObserver !== "undefined") {
+        this._restFrunkHitObserver = new ResizeObserver(() => this._positionRestFrunkHit());
+        this._restFrunkHitObserver.observe(stage);
+        this._restFrunkHitObserver.observe(bounds);
+      }
+    }
+
+    _positionClimateLayout() {
+      if (this._view !== "clim" || !this.shadowRoot) return;
+      const page = this.shadowRoot.querySelector(".climPage");
+      const image = this.shadowRoot.querySelector(".climWrap .climImg");
+      const left = this.shadowRoot.querySelector(".climLeft");
+      if (!page || !image || !left) return;
+      const pr = page.getBoundingClientRect(), ir = image.getBoundingClientRect();
+      if (!pr.width || !ir.width) return;
+      /* Size the left-side panel to the real gap between card edge and image. */
+      const leftPanelWidth = Math.max(0, ir.left - pr.left - 16);
+      const bottomControls = String(this._car && this._car.climate_controls_position || "left").trim().toLowerCase() === "bottom";
+      page.style.setProperty("--clim-panel-width", `${leftPanelWidth}px`);
+      left.style.width = bottomControls ? `${pr.width}px` : `${leftPanelWidth}px`;
+      const controls = this.shadowRoot.querySelector(".climCtl");
+      const extras = page.querySelector(".climExtrasOverlay");
+      if (extras && controls && bottomControls) {
+        extras.style.setProperty("--clim-controls-placeholder", `${controls.getBoundingClientRect().height + 32}px`);
+      } else if (extras) extras.style.removeProperty("--clim-controls-placeholder");
+      /* The buttons stay in the left-side stack; only the Power/temperature/
+         Vent row moves when the bottom layout is selected. */
+      page.querySelectorAll(".climModesBlock > .climX").forEach((button) => {
+        button.style.width = `${leftPanelWidth}px`;
+      });
+      const temps = page.querySelector(".climTemps");
+      const status = this.shadowRoot.querySelector(".infoStack");
+      if (temps && status && controls) {
+        const statusRect = status.getBoundingClientRect();
+        const controlRect = controls.getBoundingClientRect();
+        const pageRect = page.getBoundingClientRect();
+        const defrost = page.querySelector("#btnDefrost");
+        const lowerBoundary = bottomControls && defrost ? defrost.getBoundingClientRect().top : controlRect.top;
+        const centerY = (statusRect.bottom + lowerBoundary) / 2;
+        temps.style.top = `${Math.round(centerY - pageRect.top)}px`;
+      }
+      const cop = this.shadowRoot.querySelector(".copWrap");
+      const pet = page.querySelector("#btnPet");
+      const card = this.shadowRoot.querySelector("ha-card");
+      const copParent = cop && cop.offsetParent;
+      if (cop && pet && card && copParent) {
+        const petRect = pet.getBoundingClientRect();
+        const cardRect = card.getBoundingClientRect();
+        const parentRect = copParent.getBoundingClientRect();
+        const cardBottom = cardRect.bottom - (parseFloat(getComputedStyle(card).paddingBottom) || 0);
+        const regionBottom = bottomControls && controls
+          ? Math.min(cardBottom, controls.getBoundingClientRect().top)
+          : cardBottom;
+        const centerY = (petRect.bottom + regionBottom) / 2;
+        cop.style.top = `${Math.round(centerY - parentRect.top - cop.offsetHeight / 2)}px`;
+        cop.style.bottom = "auto";
+      }
+    }
+
+    _updateClimateCable() {
+      if (this._view !== "clim" || !this.shadowRoot) return;
+      const carSvg = this.shadowRoot.querySelector(".climWrap svg.ovl");
+      const page = this.shadowRoot.querySelector(".climPage");
+      const card = this.shadowRoot.querySelector("ha-card");
+      const layer = this.shadowRoot.getElementById("climCableLayer");
+      const cable = this.shadowRoot.getElementById("climCableLive");
+      const dash = this.shadowRoot.getElementById("climCableDashLive");
+      const climatePhoto = this._img("image_climate");
+      const defaultPort = /climate3\.(?:jpg|png)(?:\?|$)/.test(climatePhoto) ? [56, 520] : (this._packClimPort() || [78, 478]);
+      const port = anchor(this._car.climate_anchors || {}, "port", defaultPort);
+      if (!carSvg || !page || !card || !layer || !cable || !port) return;
+      const sr = carSvg.getBoundingClientRect(), pr = page.getBoundingClientRect(), cr = card.getBoundingClientRect();
+      if (!sr.width || !sr.height || !pr.width || !pr.height) return;
+      const view = carSvg.viewBox.baseVal;
+      const scaleX = sr.width / view.width, scaleY = sr.height / view.height;
+      const px = sr.left - pr.left + port[0] * scaleX;
+      const py = sr.top - pr.top + port[1] * scaleY;
+      const cardBottomY = cr.bottom - pr.top;
+      layer.setAttribute("viewBox", `0 0 ${pr.width} ${pr.height}`);
+      /* In climate view the cable drops from the port, sweeps left, and exits
+         the card edge. Keep the exit tied to the card bottom and the car port
+         tied to the positioned climate image. */
+      const exitX = -16;
+      const exitY = Math.min(cardBottomY - 10, Math.max(py + 48 * scaleY, cardBottomY * .88));
+      const leadLeft = Math.max(18, Math.min(28, pr.width * .05));
+      const bendLeft = Math.max(50, Math.min(68, pr.width * .13));
+      const bendDown = Math.max(34, Math.min(54, pr.height * .1));
+      const exitHandle = Math.max(55, Math.min(92, pr.width * .18));
+      const bendX = px - bendLeft;
+      const bendY = py + bendDown;
+      const d = `M ${px} ${py} C ${px - leadLeft * .4} ${py} ${px - leadLeft * .8} ${py + bendDown * .08} ${px - leadLeft} ${py + bendDown * .28} C ${px - bendLeft * .55} ${py + bendDown * .82} ${px - bendLeft * .82} ${bendY} ${bendX} ${bendY} C ${bendX - exitHandle * .45} ${bendY + 4} ${exitX + exitHandle * .72} ${exitY - 6} ${exitX} ${exitY}`;
+      cable.setAttribute("d", d);
+      if (dash) dash.setAttribute("d", d);
+      const bolt = this.shadowRoot.getElementById("climBolt");
+      if (bolt) {
+        const boltX = px - leadLeft * .4;
+        bolt.setAttribute("transform", `translate(${boltX - 4.5} ${py - 15}) scale(.6)`);
+      }
+    }
+
+    _trackClimateCable() {
+      if (this._view !== "clim" || !this._climateDriveTimer) return;
+      this._updateClimateCable();
+      this._climateCableFrame = requestAnimationFrame(() => this._trackClimateCable());
+    }
+
+    _climateTransitionTiming(direction) {
+      const configured = (this._car && this._car.climate_transition) || {};
+      const values = configured[direction] || {};
+      const seconds = (value, fallback) => {
+        if (value === undefined || value === null || value === "") return fallback;
+        let n;
+        if (typeof value === "string" && /ms$/i.test(value.trim())) n = parseFloat(value) / 1000;
+        else n = parseFloat(value);
+        return Number.isFinite(n) ? Math.max(0.08, Math.min(5, n)) : fallback;
+      };
+      return {
+        drive_away: seconds(values.drive_away, 0.5625),
+        drive_in: seconds(values.drive_in, 0.72)
+      };
+    }
+
+    /* put the back button right of the battery line (which sits below the status line) */
+    _placeBack() {
+      const sr = this.shadowRoot;
+      if (!sr || this._view !== "clim") return;
+      const bb = sr.getElementById("ctlBack"), card = sr.querySelector("ha-card"), bl = sr.querySelector(".battLine");
+      if (!bb || !card || !bl) return;
+      const car = this._car || {};
+      const backX = car.climate_back_x !== undefined ? car.climate_back_x : car.climate_back_left;
+      const backY = car.climate_back_y !== undefined ? car.climate_back_y : car.climate_back_top;
+      if (backX !== undefined && backX !== null && backX !== "") bb.style.left = "var(--clim-back-left)";
+      if (backY !== undefined && backY !== null && backY !== "") bb.style.top = "var(--clim-back-top)";
+      let right = 0;
+      Array.from(bl.children).forEach((c) => { const r = c.getBoundingClientRect(); if (r.width > 0 && r.height > 0) right = Math.max(right, r.right); });
+      const br = bl.getBoundingClientRect(), cr = card.getBoundingClientRect();
+      if (!right || !cr.width || !br.height) return;
+      const size = bb.offsetWidth || 28;
+      if (backX === undefined || backX === null || backX === "") bb.style.left = `${Math.round(right - cr.left + 10)}px`;
+      if (backY === undefined || backY === null || backY === "") bb.style.top = `${Math.round(br.top + br.height / 2 - cr.top - size / 2)}px`;
+    }
+
+    _setView(v) {
+      if (this._climateTransitionTarget) {
+        const activeTarget = this._climateTransitionTarget === "main" ? "" : this._climateTransitionTarget;
+        if (v !== activeTarget) this._queuedClimateView = v;
+        return;
+      }
+      if (this._view === v) return;
+      const enteringClimate = v === "clim" && this._view !== "clim";
+      const leavingClimate = this._view === "clim" && v !== "clim";
+      const shiftState = String((this._st("shift") || {}).state || "").trim().toLowerCase();
+      const movingForInfo = this._forceDriveAnim() || ["d", "r", "n", "drive", "reverse", "neutral"].includes(shiftState) || (Number(this._speedKph()) || 0) > 1;
+      const keepParkedInfo = !this._visualPlugged() && !this._charging() && !movingForInfo;
+      const infoSelectors = keepParkedInfo ? [] : [".infoStack"];
+
+      /* Other view changes stay synchronous. Climate is the only view whose
+         geometry differs enough to need a staged handoff. */
+      if (!(enteringClimate || leavingClimate)) {
+        if (this._view === "map") { this._mapEl = null; this._mapWanted = null; }
+        this._view = v;
+        this._built = false;
+        this._build();
+        this._update();
+        return;
+      }
+
+      clearTimeout(this._climateDriveTimer);
+      this._climateDriveTimer = null;
+      if (this._climateCableFrame) cancelAnimationFrame(this._climateCableFrame);
+      this._climateCableFrame = null;
+      if (this.shadowRoot) {
+        this.shadowRoot.querySelectorAll(".transitionSnapshot, .snapLayer").forEach((el) => el.remove());
+        this.shadowRoot.querySelectorAll(".transitionFadeLive, .transitionSourceHidden, .driveIn, .mainArrival, .mainArrivalPlugged, .mainUIArrival, .climateMenuIn, .restHotspotsPending, .restHotspotsFadeIn").forEach((el) => {
+          el.classList.remove("transitionFadeLive", "transitionSourceHidden", "driveIn", "mainArrival", "mainArrivalPlugged", "mainUIArrival", "climateMenuIn", "restHotspotsPending", "restHotspotsFadeIn");
+          el.style.removeProperty("--climate-away-duration");
+          el.style.removeProperty("--climate-drive-in-delay");
+          el.style.removeProperty("--climate-ui-in-delay");
+        });
+      }
+
+      const sourceView = this._view;
+      const oldCard = this.shadowRoot && this.shadowRoot.querySelector("ha-card");
+      const oldCardRect = oldCard && oldCard.getBoundingClientRect();
+      if (!oldCard || !oldCardRect || !oldCardRect.height) {
+        if (sourceView === "map") { this._mapEl = null; this._mapWanted = null; }
+        this._view = v;
+        this._built = false;
+        this._build();
+        this._update();
+        return;
+      }
+
+      const timing = this._climateTransitionTiming(enteringClimate ? "to_climate" : "to_main");
+      const reducedMotion = !!(window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches);
+      const awayMs = reducedMotion ? 24 : Math.round(timing.drive_away * 1000);
+      const driveInMs = reducedMotion ? 24 : Math.round(timing.drive_in * 1000);
+      const uiFadeMs = reducedMotion ? 24 : 360;
+      const sourceHeight = oldCardRect.height;
+      let targetHeight = sourceHeight;
+      let chargeRowWasOpen = false;
+
+      /* Measure the climate card at its normal collapsed height without leaving
+         the source view collapsed during the departure animation. */
+      if (enteringClimate) {
+        const chargeRow = this.shadowRoot.querySelector("#rowChg");
+        chargeRowWasOpen = !!(chargeRow && chargeRow.classList.contains("open"));
+        if (chargeRowWasOpen) {
+          chargeRow.classList.remove("open");
+          targetHeight = oldCard.getBoundingClientRect().height || sourceHeight;
+          chargeRow.classList.add("open");
+        }
+        this._climateMainHeight = targetHeight;
+      }
+
+      const carSelector = enteringClimate ? "#restWrap" : ".climWrap";
+      const carClass = enteringClimate
+        ? (this._visualPlugged() ? "toClimatePlugged" : "toClimateUnplugged")
+        : "fromClimate";
+      const car = this._transitionSnapshot(carSelector, carClass, oldCardRect);
+      if (enteringClimate && car) {
+        const hotspotSnapshot = car.querySelector(".restHotspotsOverlay");
+        if (hotspotSnapshot) {
+          hotspotSnapshot.style.setProperty("--climate-away-duration", `${timing.drive_away}s`);
+          hotspotSnapshot.classList.add("transitionFadeLive");
+        }
+      }
+      const layer = document.createElement("div");
+      layer.className = "snapLayer carSnapLayer";
+      if (car) {
+        layer.appendChild(car);
+        if (leavingClimate) {
+          const cable = this._transitionSnapshot("#climCableLayer", "fromClimate", oldCardRect);
+          if (cable) {
+            cable.classList.remove("transitionSnapshot", "carDepart", "fromClimate");
+            cable.classList.add("transitionFadeLive");
+            Object.assign(cable.style, {
+              right: "auto", bottom: "auto", zIndex: "21", transform: "none", background: "transparent"
+            });
+            layer.appendChild(cable);
+          }
+        }
+      }
+
+      const sourceCar = this.shadowRoot.querySelector(carSelector);
+      const sourceCable = leavingClimate ? this.shadowRoot.querySelector("#climCableLayer") : null;
+      const transitionElements = enteringClimate
+        ? [".acts", ".rows", ".ftr", ...infoSelectors, ...(this._car && this._car.climate_hide_model === true ? [".nmModel"] : [])]
+        : [".climPage", "#ctlBack", ...infoSelectors, ...(this._car && this._car.climate_hide_model === true ? [".nmModel"] : [])];
+      transitionElements.forEach((selector) => {
+        const element = this.shadowRoot.querySelector(selector);
+        if (!element) return;
+        const bounds = element.getBoundingClientRect();
+        if (!bounds.width && !bounds.height) return;
+        element.style.setProperty("--climate-away-duration", `${timing.drive_away}s`);
+        element.classList.add("transitionFadeLive");
+      });
+      if (sourceCar) sourceCar.classList.add("transitionSourceHidden");
+      if (sourceCable) sourceCable.classList.add("transitionSourceHidden");
+
+      /* Keep the old view's exact card box until its car and live UI have left.
+         The target DOM is not created until this timer fires. */
+      oldCard.style.height = `${sourceHeight}px`;
+      oldCard.style.minHeight = `${sourceHeight}px`;
+      oldCard.style.overflow = "hidden";
+
+      this._climateTransitionTarget = v || "main";
+      const token = (this._climateTransitionToken || 0) + 1;
+      this._climateTransitionToken = token;
+      this.shadowRoot.appendChild(layer);
+
+      this._climateDriveTimer = window.setTimeout(() => {
+        if (token !== this._climateTransitionToken || !this.shadowRoot) return;
+        if (this._climateCableFrame) cancelAnimationFrame(this._climateCableFrame);
+        this._climateCableFrame = null;
+        layer.remove();
+
+        if (enteringClimate && chargeRowWasOpen) {
+          const chargeRow = this.shadowRoot.querySelector("#rowChg");
+          if (chargeRow) chargeRow.classList.remove("open");
+          if (this._openRows) this._openRows.rowChg = false;
+        }
+        if (sourceView === "map") { this._mapEl = null; this._mapWanted = null; }
+
+        this._view = v;
+        this._built = false;
+        this._build();
+        this._update();
+
+        const card = this.shadowRoot.querySelector("ha-card");
+        const heldHeight = enteringClimate ? targetHeight : (this._climateMainHeight || sourceHeight);
+        if (card) {
+          card.style.height = `${heldHeight}px`;
+          card.style.minHeight = `${heldHeight}px`;
+          card.style.overflow = "hidden";
+          card.style.setProperty("--climate-ui-in-delay", "0ms");
+        }
+
+        if (enteringClimate) {
+          const clim = this.shadowRoot.querySelector(".climWrap");
+          if (clim) {
+            clim.style.setProperty("--climate-drive-in-duration", `${timing.drive_in}s`);
+            clim.style.setProperty("--climate-drive-in-delay", "0ms");
+            void clim.offsetWidth;
+            clim.classList.add("driveIn");
+          }
+          [".nmModel", ...infoSelectors, ".climTemps", ".climExtrasOverlay", ".copWrap", ".backBtn", "#climCableLiveGroup"].forEach((selector) => {
+            const element = this.shadowRoot.querySelector(selector);
+            if (element) element.classList.add("climateMenuIn");
+          });
+          this._climateDriveTimer = window.setTimeout(() => {
+            if (token !== this._climateTransitionToken || !this.shadowRoot) return;
+            if (this._climateCableFrame) cancelAnimationFrame(this._climateCableFrame);
+            this._climateCableFrame = null;
+            if (clim) {
+              clim.classList.remove("driveIn");
+              clim.style.removeProperty("--climate-drive-in-duration");
+              clim.style.removeProperty("--climate-drive-in-delay");
+            }
+            this.shadowRoot.querySelectorAll(".climateMenuIn").forEach((el) => el.classList.remove("climateMenuIn"));
+            const liveCard = this.shadowRoot.querySelector("ha-card");
+            if (liveCard) liveCard.style.removeProperty("--climate-ui-in-delay");
+            this._positionClimateLayout();
+            this._updateClimateCable();
+            this._climateTransitionTarget = null;
+            this._climateDriveTimer = null;
+            this._flushRebuild();
+            this._drainQueuedClimateView();
+          }, Math.ceil(Math.max(driveInMs, uiFadeMs) + 120));
+          this._trackClimateCable();
+        } else {
+          const arrival = this.shadowRoot.getElementById("carBox");
+          const restHotspots = this.shadowRoot.getElementById("restHotspotsOvl");
+          if (restHotspots) {
+            restHotspots.classList.add("restHotspotsPending");
+            const hotspotFadeDelay = Math.max(0, Math.ceil(Math.max(driveInMs, uiFadeMs) + 120 - 250));
+            window.setTimeout(() => {
+              if (token !== this._climateTransitionToken || !this.shadowRoot) return;
+              const liveHotspots = this.shadowRoot.getElementById("restHotspotsOvl");
+              if (liveHotspots) {
+                liveHotspots.classList.remove("restHotspotsPending");
+                liveHotspots.classList.add("restHotspotsFadeIn");
+              }
+              this._positionRestFrunkHit();
+            }, hotspotFadeDelay);
+          }
+          if (arrival) {
+            arrival.style.setProperty("--climate-drive-in-duration", `${timing.drive_in}s`);
+            arrival.style.setProperty("--climate-drive-in-delay", "0ms");
+            void arrival.offsetWidth;
+            arrival.classList.add("mainArrival");
+            if (this._visualPlugged()) arrival.classList.add("mainArrivalPlugged");
+          }
+          [".acts", ".rows", ".ftr", ...infoSelectors, ...(this._car && this._car.climate_hide_model === true ? [".nmModel"] : [])].forEach((selector) => {
+            const element = this.shadowRoot.querySelector(selector);
+            if (element) element.classList.add("mainUIArrival");
+          });
+          this._climateDriveTimer = window.setTimeout(() => {
+            if (token !== this._climateTransitionToken || !this.shadowRoot) return;
+            if (arrival) {
+              arrival.classList.remove("mainArrival", "mainArrivalPlugged");
+              arrival.style.removeProperty("--climate-drive-in-duration");
+              arrival.style.removeProperty("--climate-drive-in-delay");
+            }
+            this.shadowRoot.querySelectorAll(".mainUIArrival").forEach((el) => el.classList.remove("mainUIArrival"));
+            if (restHotspots) restHotspots.classList.remove("restHotspotsPending");
+            this._positionRestFrunkHit();
+            const liveCard = this.shadowRoot.querySelector("ha-card");
+            if (liveCard) {
+              liveCard.style.height = "";
+              liveCard.style.minHeight = "";
+              liveCard.style.overflow = "";
+              liveCard.style.removeProperty("--climate-ui-in-delay");
+            }
+            this._climateMainHeight = null;
+            this._climateTransitionTarget = null;
+            this._climateDriveTimer = null;
+            this._flushRebuild();
+            this._drainQueuedClimateView();
+          }, Math.ceil(Math.max(driveInMs, uiFadeMs) + 120));
+        }
+      }, Math.max(0, awayMs + 20));
+    }
     _carImg() {
       const chg = this._hass ? this._charging() : false;
-      const plg = this._hass ? this._plugged() : false;
+      const plg = this._visualPlugged();
       const tsrc = (chg && this._img("image_top_charging")) ||
                    (plg && this._img("image_top_plugged")) ||
                    this._img("image");
@@ -2663,7 +3781,7 @@
     </g>`;
       const TA = this._car.top_anchors || {};
       const [fkx, fky] = anchor(TA, "frunk", [180, 108]);
-      const [lkx, lky] = anchor(TA, "lock", [180, baked ? 466 : 400]);
+
       const [tkx, tky] = anchor(TA, "trunk", [180, baked ? 658 : 612]);
       const tpmsFrontY = baked ? 150 : 120;
       const tpmsRearY = baked ? 640 : 650;
@@ -2686,10 +3804,7 @@
               font-size="20" font-weight="600" fill="#f2f3f4">Open</text>
       </g>
     </g>
-    <g id="lockTap" class="tapa">
-      <circle cx="${lkx}" cy="${lky}" r="30" fill="#000" opacity="0"/>
-      <g id="lockIcon" transform="translate(${lkx - 14},${lky - 14}) scale(1.15)"></g>
-    </g>
+
     ${boltArea}
     <g id="sentryEye" style="display:none">
       <circle cx="180" cy="14" r="8" fill="#141414" stroke="#d53a3a" stroke-width="2"/>
@@ -2728,10 +3843,16 @@
   <!-- dash -->
   <path d="M54 58 C 110 44 250 44 306 58 L 306 84 C 250 72 110 72 54 84 Z" fill="#2a2d33"/>
   <path d="M150 62 L 210 62 L 208 78 L 152 78 Z" fill="#17191d"/>
-  <!-- steering wheel (right-hand drive, matches the tap anchor) -->
-  <circle cx="234" cy="78" r="25" fill="none" stroke="#3d4147" stroke-width="7"/>
-  <circle cx="234" cy="78" r="4" fill="#3d4147"/>
-  <path d="M212 74 L 230 78 M256 74 L 238 78 M234 100 L 234 84" stroke="#3d4147" stroke-width="5" stroke-linecap="round"/>
+  <!-- steering wheel -->
+  ${this._car.steering === "right" ?
+    `<circle cx="234" cy="78" r="25" fill="none" stroke="#3d4147" stroke-width="7"/>
+     <circle cx="234" cy="78" r="4" fill="#3d4147"/>
+     <path d="M212 74 L 230 78 M256 74 L 238 78 M234 100 L 234 84" stroke="#3d4147" stroke-width="5" stroke-linecap="round"/>`
+  :
+    `<circle cx="121" cy="78" r="25" fill="none" stroke="#3d4147" stroke-width="7"/>
+     <circle cx="121" cy="78" r="4" fill="#3d4147"/>
+     <path d="M99 74 L 117 78 M143 74 L 125 78 M121 100 L 121 84" stroke="#3d4147" stroke-width="5" stroke-linecap="round"/>`
+  }
   <!-- door panels -->
   <path d="M44 100 L 60 104 L 58 400 L 42 396 Z" fill="#202329"/>
   <path d="M316 100 L 300 104 L 302 400 L 318 396 Z" fill="#202329"/>
@@ -2764,8 +3885,13 @@
 
     _climAnchors() {
       const m = this._car.climate_anchors || {};
+      const climate3 = /climate3\.(?:jpg|png)(?:\?|$)/.test(this._img("image_climate"));
+      const defaults = climate3 ? CLIM3_ANCHOR_DEFAULTS : CLIM_ANCHOR_DEFAULTS;
       const pos = {};
-      Object.keys(CLIM_ANCHOR_DEFAULTS).forEach((k) => { pos[k] = anchor(m, k, CLIM_ANCHOR_DEFAULTS[k]); });
+      Object.keys(defaults).forEach((k) => { pos[k] = anchor(m, k, defaults[k]); });
+      if (!m.wheel && this._car.steering !== "right") {
+        pos.wheel = climate3 ? [121, 220] : [121, 97];
+      }
       return pos;
     }
 
@@ -2774,13 +3900,22 @@
       const photo = this._img("image_climate");
       const A = this._climAnchors();
       const cm = car.climate_anchors || {};
-      const [ppx, ppy] = anchor(cm, "port", this._packClimPort() || [78, 478]);
+      const climatePhoto = this._img("image_climate");
+      const defaultPort = /climate3\.(?:jpg|png)(?:\?|$)/.test(climatePhoto) ? [56, 520] : (this._packClimPort() || [78, 478]);
+      const [ppx, ppy] = anchor(cm, "port", defaultPort);
+      /* cable: from the card's bottom edge (the svg overflows, the card clips it) up to the port; starts at the
+         bottom so the charging dash flows towards the car */
+      const cableX = ppx - 18, cableBottom = 650;
+      const cablePath = `M ${cableX} ${cableBottom} L ${cableX} ${ppy + 36} C ${cableX} ${ppy + 20} ${ppx - 8} ${ppy + 10} ${ppx} ${ppy}`;
+      const vY = A && A.vents && Number.isFinite(Number(A.vents[1]))
+        ? Number(A.vents[1])
+        : ((A && A.fl && A.fl[1] !== undefined) ? A.fl[1] - 190 : 60);
       const vent = (x, rot, cls) => {
         const coneDur = cls === "vR" ? "3s" : "3.6s";
         const coneBeg = cls === "vR" ? "1.1s" : "0s";
         const s1Beg = cls === "vR" ? "0.7s" : "0s";
         return `
-      <g class="vent ${cls}" transform="translate(${x} 60) rotate(${rot})">
+      <g class="vent ${cls}" transform="translate(${x} ${vY}) rotate(${rot})">
         <path class="cone" d="M -9 0 L -44 186 Q 0 210 44 186 L 9 0 Z" fill="url(#coneG)" filter="url(#mistBlur)">
           <animate attributeName="opacity" values=".7;1;.7" keyTimes="0;.5;1" dur="${coneDur}" begin="${coneBeg}" repeatCount="indefinite"/>
           <animateTransform attributeName="transform" type="scale" values=".94 1;1.08 1;.94 1" keyTimes="0;.5;1"
@@ -2821,24 +3956,16 @@
       ${vent(A.fl[0], -3, "vL")}
       ${vent(A.fr[0], 3, "vR")}
     </g>
-    ${this._cableBaked() ? `
-    <g id="climBoltPulse" style="display:none" transform="translate(${ppx} ${ppy})">
-      <g>
-        <path d="M2 -13 L -7 3 h 5 l -3 12 l 11 -17 h -6 l 5 -11 z" fill="#2bd96f"/>
-        <animateTransform attributeName="transform" type="scale" values="1;1.28;1" dur="1.5s" repeatCount="indefinite"/>
-        <animate attributeName="opacity" values=".85;1;.85" dur="1.5s" repeatCount="indefinite"/>
-      </g>
-    </g>` : `
+    <!-- The climate photo is an interior view; the exterior pack's baked
+         cable does not appear in it, so always render the cable overlay here. -->
     <g id="climCableG" style="display:none">
-      <path id="climCable" d="M ${ppx - 78} ${ppy + 84} C ${ppx - 36} ${ppy + 80} ${ppx - 26} ${ppy + 46} ${ppx - 11} ${ppy + 17} C ${ppx - 7} ${ppy + 9} ${ppx - 3} ${ppy + 4} ${ppx} ${ppy}"
+      <path id="climCableLocal" d="${cablePath}" style="display:none"
             stroke="#3f6db5" stroke-width="4" fill="none" stroke-linecap="round"/>
-      <path id="climCableDash" d="M ${ppx - 78} ${ppy + 84} C ${ppx - 36} ${ppy + 80} ${ppx - 26} ${ppy + 46} ${ppx - 11} ${ppy + 17} C ${ppx - 7} ${ppy + 9} ${ppx - 3} ${ppy + 4} ${ppx} ${ppy}"
-            pathLength="100" stroke="#3aa869" stroke-opacity=".9" stroke-width="2.4" fill="none"
-            stroke-linecap="round" stroke-dasharray="28 72" style="display:none">
-        <animate attributeName="stroke-dashoffset" from="100" to="0" dur="1.5s" repeatCount="indefinite"/>
+      <path id="climCableDashLocal" d="${cablePath}"
+            pathLength="100" stroke="#3aa869" stroke-opacity=".72" stroke-width="2.4" fill="none"
+            stroke-linecap="round" stroke-dasharray="12 38" style="display:none">
+        <animate attributeName="stroke-dashoffset" from="0" to="100" dur="2s" repeatCount="indefinite"/>
       </path>
-      <path id="climBolt" transform="translate(${ppx - 42} ${ppy - 46})"
-            d="M10 0 L 0 17 h 7 l -3.5 14 l 12 -19 h -7 l 5 -12 z" fill="#cfd2d5"/>
       <rect id="climPortNub" x="${ppx - 4}" y="${ppy - 10}" width="9" height="11" rx="1.5"
             fill="#2a2c2e" stroke="#606468" stroke-width="1"/>
       <path id="climPortFlap" d="M ${ppx + 4} ${ppy - 25} L ${ppx - 4} ${ppy - 12} L ${ppx + 11} ${ppy - 16} Z"
@@ -2846,14 +3973,14 @@
       <circle id="climGlow" cx="${ppx}" cy="${ppy}" r="4" fill="#d53a3a">
         <animate attributeName="opacity" values="1;.45;1" dur="1.5s" repeatCount="indefinite"/>
       </circle>
-    </g>`}
-    ${heatWaves("seatFL", A.fl[0], A.fl[1])}
-    ${heatWaves("seatFR", A.fr[0], A.fr[1])}
-    ${heatWaves("seatRL", A.rl[0], A.rl[1])}
-    ${heatWaves("seatRR", A.rr[0], A.rr[1])}
+    </g>    ${heatWaves("seatFL", A.fl[0], A.fl[1], car.climate_squish_fix || 1.0, car.climate_icon_scale || 1.0)}
+    ${heatWaves("seatFR", A.fr[0], A.fr[1], car.climate_squish_fix || 1.0, car.climate_icon_scale || 1.0)}
+    ${heatWaves("seatRL", A.rl[0], A.rl[1], car.climate_squish_fix || 1.0, car.climate_icon_scale || 1.0)}
+    ${heatWaves("seatRR", A.rr[0], A.rr[1], car.climate_squish_fix || 1.0, car.climate_icon_scale || 1.0)}
     <g id="wheelHeat" class="tapa" style="cursor:pointer">
       <circle cx="${A.wheel[0]}" cy="${A.wheel[1]}" r="26" fill="#000" opacity="0"/>
-      <g id="wheelHeatIcon" transform="translate(${A.wheel[0] - 17},${A.wheel[1] - 17}) scale(1.42)">
+      <g transform="translate(${A.wheel[0]}, ${A.wheel[1]}) scale(${(car.climate_squish_fix || 1.0) * (car.climate_icon_scale || 1.0)}, ${car.climate_icon_scale || 1.0}) translate(${-A.wheel[0]}, ${-A.wheel[1]})">
+        <g id="wheelHeatIcon" transform="translate(${A.wheel[0] - 17},${A.wheel[1] - 17}) scale(1.42)">
         <path d="M12,2A10,10 0 0,0 2,12A10,10 0 0,0 12,22A10,10 0 0,0 22,12A10,10 0 0,0 12,2M12,4C15.72,4 18.85,6.55 19.74,10H4.26C5.15,6.55 8.28,4 12,4M12,14A2,2 0 0,1 10,12A2,2 0 0,1 12,10A2,2 0 0,1 14,12A2,2 0 0,1 12,14M4.26,14H8.09L11,17V19.93C7.55,19.5 4.79,17.06 4.26,14M15.91,14H19.74C19.21,17.06 16.45,19.5 13,19.93V17L15.91,14Z"
               fill="#a9adb2"/>
       </g>
@@ -2861,6 +3988,7 @@
             stroke="#a9adb2" stroke-width="2.6" fill="none" stroke-linecap="round"/>
       <path id="wheelHeat_w1" d="M ${A.wheel[0] + 5} ${A.wheel[1] - 15} q 3.4 -2.6 0 -5.2 q -3.4 -2.6 0 -5.2"
             stroke="#a9adb2" stroke-width="2.6" fill="none" stroke-linecap="round"/>
+      </g>
       <text id="wheelHeat_auto" x="${A.wheel[0]}" y="${A.wheel[1] + 25}" text-anchor="middle"
             font-size="10.5" font-weight="700" fill="#a9adb2" style="display:none">Auto</text>
     </g>
@@ -2871,51 +3999,48 @@
   </svg>
 </div>
 <div class="climPage">
+  <svg class="climCableLayer" id="climCableLayer" preserveAspectRatio="none" aria-hidden="true">
+    <g id="climCableLiveGroup" style="display:none">
+      <path id="climCableLive" d="" stroke="#3f6db5" stroke-opacity=".72" stroke-width="4" fill="none" stroke-linecap="round"/>
+      <path id="climCableDashLive" d="" pathLength="100" stroke="#3aa869" stroke-opacity=".72" stroke-width="2.4" fill="none" stroke-linecap="round" stroke-dasharray="12 38" style="display:none">
+        <animate attributeName="stroke-dashoffset" from="0" to="100" dur="2s" repeatCount="indefinite"/>
+      </path>
+      <path id="climBolt" transform="translate(0 0) scale(.6)"
+            d="M10 0 L 0 17 h 7 l -3.5 14 l 12 -19 h -7 l 5 -12 z" fill="#4fd07a" style="display:none"/>
+    </g>
+  </svg>
   <div class="climTemps" id="climTemps">-</div>
-  <div class="climCtl">
-    <button class="pwr" id="climPwr">${svgIcon(ICONS.power)}<span id="climPwrLb">Off</span></button>
-    <button class="arrow" id="tDn">‹</button>
-    <span class="big" id="tTgt">-</span>
-    <button class="arrow" id="tUp">›</button>
-    <button class="pwr" id="climVent">${svgIcon(ICONS.vent)}<span>Vent</span></button>
+  <div class="climLeft" style="bottom:${Number.isFinite(Number(car.climate_left_bottom)) && car.climate_left_bottom !== "" && car.climate_left_bottom !== null ? Number(car.climate_left_bottom) : (this._st("cop") ? 132 : 12)}px">
+  <div class="climExtrasOverlay">
+    <div class="climCtl">
+      <button class="pwr" id="climPwr">${svgIcon(ICONS.power)}<span id="climPwrLb">Off</span></button>
+      <div class="climTempAdjust"><button class="arrow" id="tDn" aria-label="Lower target temperature">‹</button>
+        <span class="big" id="tTgt">-</span><button class="arrow" id="tUp" aria-label="Raise target temperature">›</button></div>
+      <button class="pwr" id="climVent">${svgIcon(ICONS.vent)}<span>Vent</span></button>
+    </div>
+    <div class="climModesBlock">
+      <button class="defrostBtn climX" id="btnDefrost">${climIcon(CLIM_GLYPH.defrost)}Defrost Car</button>
+      ${this._climModeButtonsHtml()}
+    </div>
   </div>
-  <button class="defrostBtn" id="btnDefrost">${climIcon(CLIM_GLYPH.defrost)}Defrost Car</button>
+  </div>
+  <button type="button" class="backBtn" id="ctlBack" title="Back"><svg class="backChevron" viewBox="0 0 24 24" aria-hidden="true"><path d="M15.5 5 L8.5 12 L15.5 19"/></svg></button>
+
   ${this._climExtraHtml()}
 </div>`;
     }
 
-    /* Bioweapon / Camp / Pet / Cabin Overheat Protection - rendered only when
-       the integration exposes the matching capability. */
-    _climExtraHtml() {
+    /* Bioweapon / Camp / Pet buttons are drawn over the lower-right of the
+       climate photo, leaving the charging cable visible and avoiding added
+       card height. Rendered only when the integration exposes the capability. */
+    _climModeButtonsHtml() {
       const cs = this._st("climate");
       const fans = (cs && cs.attributes.fan_modes) || [];
       const presets = (cs && cs.attributes.preset_modes) || [];
       const has = (arr, v) => arr.some((o) => String(o).toLowerCase() === v);
-      /* tesla_custom reports the SAME preset_modes and fan_modes list for every
-         car, so these lists are not capability detection. Checked again on
-         four of Nick's cars: all four report fan_modes ["off","bioweapon"],
-         including the Model 3s that plainly do not have it.
-
-         So Bioweapon falls back to the MODEL. It needs a HEPA filter, which
-         Model S, X and Y carry and Model 3 does not - Tesla could not fit the
-         larger filter in a Model 3. Verified against Tesla reference material
-         rather than recalled, and it matches what Nick found on Buddy, a
-         Model 3 Highland: the button was there and the feature was not.
-
-         A model string is a weaker signal than a capability flag, so both
-         directions are overridable: hide_climate: [bio] takes it away from a
-         car that reports one, show_climate: [bio] gives it to a Model 3 with
-         a retrofitted filter. */
       const hidden = (this._car.hide_climate || []).map((x) => String(x).toLowerCase());
       const shown = (this._car.show_climate || []).map((x) => String(x).toLowerCase());
       const show = (k) => shown.indexOf(k) >= 0 || hidden.indexOf(k) < 0;
-      /* The model decides whether a HEPA filter was ever fitted, and the YEAR
-         decides whether this particular car got one: the Model Y line started
-         fitting them in June 2021, and Model S and X from 2016. Both are
-         retrofittable, which is what show_climate is for. The year is decoded
-         from the VIN the car reports, so an early Model Y now hides the button
-         by itself rather than needing hide_climate set by hand. With no VIN it
-         falls back to the model alone, which is the old behaviour. */
       const model = String(this._car.model || "").toLowerCase().replace(/\s+/g, "");
       const isY = model.indexOf("modely") >= 0 || model === "y";
       const isSX = model.indexOf("models") >= 0 || model.indexOf("modelx") >= 0 ||
@@ -2932,22 +4057,23 @@
         html += `<button class="defrostBtn climX" id="btnCamp">${climIcon(CLIM_GLYPH.tent)}Camp Mode</button>`;
       if (has(presets, "dog") && show("pet"))
         html += `<button class="defrostBtn climX" id="btnPet">${climIcon(CLIM_GLYPH.paw)}Pet Mode</button>`;
-      const cop = this._st("cop");
-      if (cop) {
-        let segs;
-        if (cop.entity_id.startsWith("select.")) {
-          segs = (cop.attributes.options || ["Off", "No A/C", "On"]).map((o) => [o, o]);
-        } else {   // tesla_fleet exposes it as a climate entity
-          segs = [["Off", "off"], ["No A/C", "fan_only"], ["On", "cool"]];
-        }
-        html += `<div class="copWrap"><div class="copLbl">Cabin Overheat Protection</div>
-          <div class="copSeg" id="copSeg">` +
-          segs.map(([label, val]) => `<button data-cop="${val}">${label}</button>`).join("") +
-          `</div></div>`;
-      }
       return html;
     }
 
+    _climExtraHtml() {
+      const cop = this._st("cop");
+      if (!cop) return "";
+      let segs;
+      if (cop.entity_id.startsWith("select.")) {
+        segs = (cop.attributes.options || ["Off", "No A/C", "On"]).map((o) => [o, o]);
+      } else {   // tesla_fleet exposes it as a climate entity
+        segs = [["Off", "off"], ["No A/C", "fan_only"], ["On", "cool"]];
+      }
+      return `<div class="copWrap"><div class="copLbl">Cabin Overheat Protection</div>
+        <div class="copSeg" id="copSeg">` +
+        segs.map(([label, val]) => `<button data-cop="${val}">${label}</button>`).join("") +
+        `</div></div>`;
+    }
     _carSvg() {
       if (this._view === "map") return this._carMap();
       if (this._view === "clim") return this._carClim();
@@ -3065,18 +4191,26 @@
   <div class="noPackPath">${path}</div>
   <div class="noPackBody">A pack is seven photos from the Tesla app. If you own this car,
     you are the right person to build one -
-    <a class="packCta" href="https://github.com/MrNickIE/tesla-fleet-homeassistant#contributing-an-image-pack" target="_blank" rel="noopener">contribute a pack</a>.</div>
+    <a class="packCta" href="https://github.com/borgqueenx/sexy-home-assistant-tesla-card#contributing-an-image-pack" target="_blank" rel="noopener">contribute a pack</a>.</div>
 </div>`;
     }
 
-    _setLockIcon(locked) {
-      const g = this.shadowRoot.getElementById("lockIcon");
-      if (!g) return;
-      g.innerHTML = '<path d="' + (locked ? ICONS.lock : ICONS.unlock) + '" fill="#dfe0e2" opacity=".95"/>';
-    }
 
     _update() {
       const q = (id) => this.shadowRoot.getElementById(id);
+      const isPlg = this._visualPlugged() && !this._forceDriveAnim();
+      if (this._lastPlugged !== isPlg) {
+         if (this._lastPlugged !== undefined) {
+            this._lastPlugged = isPlg;
+            if (this._climateDriveTimer || this._climateTransitionTarget) this._pendingRebuild = true;
+            else {
+              this._built = false;
+              if (this._hass) this._build();
+              return this._update();
+            }
+         }
+         this._lastPlugged = isPlg;
+      }
 
       /* Detection is all-or-nothing: miss the battery entity and NOTHING
          resolves, so the card used to render blank with no explanation of why
@@ -3089,7 +4223,7 @@
             ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
           dg.innerHTML = "No Tesla entities found for prefix <b>" + (p || "(empty)") + "</b>. " +
             "This card looks for <code>sensor." + p + "battery</code> (Tesla Custom) or " +
-            "<code>sensor." + p + "battery_level</code> (Tesla Fleet). Open " +
+            "<code>sensor." + p + "battery_level</code> (Tesla Fleet / Teslemetry). Open " +
             "<b>Developer tools &rarr; States</b>, find your car's battery sensor, and set the " +
             "prefix to everything between <code>sensor.</code> and <code>battery</code> " +
             "(including the trailing underscore).";
@@ -3106,22 +4240,35 @@
       const bf = q("battFill");
       bf.style.width = Math.max(0, Math.min(100, pct || 0)) * 0.21 + "px";
       bf.className = "battFill" + (charging ? " chg" : pct !== null && pct <= 10 ? " crit" : pct !== null && pct <= 20 ? " low" : "");
+      if (this._view === "clim") requestAnimationFrame(() => { this._positionClimateLayout(); this._placeBack(); this._updateClimateCable(); });
       q("battTxt").textContent =
         (pct === null ? "-" : Math.round(pct) + "%") +
         (rng === null ? "" : " · " + Math.round(rng) + " " + this._unit("range", "km"));
 
-      // status
+      // status — also check optional speed_entity sensor for driving detection
       const asleep = this._is("asleep", "on");
       const online = this._is("online", "on");
       const shiftS = this._st("shift");
-      const shift = shiftS ? shiftS.state : "P";
+      const shift = shiftS ? shiftS.state : "Park";
+      /* speed_entity: if configured, treat speed > 1 as driving regardless of shift_state
+         (useful when shift_state entity is unavailable or slow to update) */
+      const car = this._car;
+      const speedEnt = (car.speed_entity && this._hass && this._hass.states[car.speed_entity]) || this._st("speed");
+      let speedEntVal = speedEnt ? parseFloat(speedEnt.state) : null;
+      if (!Number.isFinite(speedEntVal)) speedEntVal = null;
+      const speedEntityDriving = speedEntVal !== null && isFinite(speedEntVal) && speedEntVal > 1;
       let status, durKey;
-      if (!online) { status = "Offline"; durKey = "online"; }
+      if (!online) { status = "Sleeping"; durKey = "online"; }
       else if (charging) { status = "Charging"; durKey = "charging"; }
       else if (asleep) { status = "Asleep"; durKey = "asleep"; }
-      else if (shift === "D" || shift === "R" || shift === "N") { status = "Driving"; durKey = "shift"; }
+      else if (shift === "D" || shift === "R" || shift === "N" || speedEntityDriving || this._lunaShiftDriving()) { status = "Driving"; durKey = "shift"; }
       else { status = "Parked"; durKey = "shift"; }
-      const moving = status === "Driving";
+      const moving = status === "Driving" || this._forceDriveAnim();
+      const luxEntity = String(car.lux_entity || "").trim();
+      const luxState = luxEntity && this._hass && this._hass.states[luxEntity];
+      const luxValue = luxState ? parseFloat(luxState.state) : NaN;
+      const luxThreshold = parseFloat(car.lights_lux_below);
+      const lightsOn = moving && (!luxEntity || (Number.isFinite(luxValue) && Number.isFinite(luxThreshold) && luxValue < luxThreshold));
       const durS = this._st(durKey);
       const dur = durS ? relDur(durS.last_changed) : "";
       let subTxt = status + (dur && dur !== "just now" ? " " + dur : "");
@@ -3129,7 +4276,7 @@
         const mins = this._minsToFull();
         if (!isNaN(mins) && mins > 0) {
           const h = Math.floor(mins / 60), m = Math.round(mins % 60);
-          subTxt = (h ? h + "h " : "") + m + "m remaining to charge limit";
+          subTxt = (h ? h + "h " : "") + m + "m remaining";
         }
       }
       /* The app puts the running mode where the title goes, so you cannot miss
@@ -3140,15 +4287,75 @@
       const pmode = String((climS0 && climS0.attributes.preset_mode) || "").toLowerCase();
       const MODE_LABEL = { dog: "Pet Mode", camp: "Camp Mode", keep: "Keep Climate On", defrost: "Defrosting" };
       if (MODE_LABEL[pmode]) subTxt = MODE_LABEL[pmode] + " \u00b7 " + subTxt;
-      /* Driving replaces "Parked 2h" with the speed, the way the app does.
-         Tesla reports drive_state.speed in mph regardless of the car's own
-         display units, so it is converted to match whatever unit the range
-         sensor is using. Speed was zero on every car available while this
-         was written, so the conversion is reasoned, not measured - the one
-         number on this screen I have not seen the car produce. */
-      const sp = this._speed();
-      if (moving && sp !== null) subTxt = sp;
+      /* Keep driving duration on the status line; show the current speed on
+         its own line between battery and duration. Prefer the configured or
+         prefix-discovered speed sensor, then fall back to tracker speed. */
+      let speedTxt = "";
+      const showDrivingSpeed = status === "Driving" || this._forceDriveAnim();
+      if (showDrivingSpeed) {
+        let dspeed = null;
+        if (speedEntVal !== null) {
+          const unit = String((speedEnt && speedEnt.attributes && speedEnt.attributes.unit_of_measurement) || "").trim().toLowerCase();
+          const displayUnit = /^(km\/h|kph|kmh)$/.test(unit) ? "km/h" :
+                              /^(mph|mi\/h)$/.test(unit) ? "mph" : (this._imperial() ? "mph" : "km/h");
+          dspeed = Math.round(speedEntVal) + " " + displayUnit;
+        } else {
+          dspeed = this._speed();
+        }
+        let etaTxt = "";
+        if (car.eta_entity && this._hass && this._hass.states[car.eta_entity]) {
+          const etaState = this._hass.states[car.eta_entity];
+          const etaVal = etaState.state;
+          if (etaVal && etaVal !== "unavailable" && etaVal !== "unknown") {
+            etaTxt = " · ETA " + etaVal;
+          }
+        }
+        if (dspeed !== null) speedTxt = "Speed: " + dspeed + etaTxt;
+        else if (etaTxt) speedTxt = etaTxt.trim();
+      }
       q("sub").textContent = subTxt;
+      const speedLine = q("speedLine");
+      if (speedLine) {
+        speedLine.textContent = speedTxt;
+        speedLine.classList.toggle("show", showDrivingSpeed && !!speedTxt);
+      }
+      const infoStackForStatus = q("infoStack");
+      if (infoStackForStatus) infoStackForStatus.classList.toggle("drivingInfo", showDrivingSpeed);
+      /* Move the battery and status into the lower-left of the car image only
+         when the charging photo is the one this view is showing. */
+      const infoStack = q("infoStack"), infoHome = q("infoHome"), carStage = q("carStage");
+      const forceDrive = this._forceDriveAnim();
+      const pluggedForInfo = this._visualPlugged() && !forceDrive;
+      const pluggedPhoto = pluggedForInfo && (this._img("image_side_plugged") || this._img("image_charging"));
+      const chargingPhoto = this._view !== "clim" && this._resting() && !forceDrive && ((charging && this._img("image_charging")) || pluggedPhoto);
+      if (infoStack && infoHome && carStage) {
+        const card = this.shadowRoot.querySelector("ha-card");
+        if (card) card.classList.toggle("chargeInfoMoved", chargingPhoto);
+        const positionChargeInfo = () => {
+          if (infoStack.parentElement !== carStage) return;
+          const restWrap = q("restWrap");
+          if (!restWrap) return;
+          const stageRect = carStage.getBoundingClientRect();
+          const imageRect = restWrap.getBoundingClientRect();
+          const carBox = q("carBox");
+          let carTranslateY = 0;
+          if (carBox) {
+            const transform = getComputedStyle(carBox).transform;
+            const matrix = transform && transform.match(/^matrix(3d)?\(([^)]+)\)$/);
+            if (matrix) {
+              const parts = matrix[2].split(",").map(Number);
+              carTranslateY = matrix[1] ? (parts[13] || 0) : (parts[5] || 0);
+            }
+          }
+          const visualBottom = imageRect.bottom - carTranslateY;
+          infoStack.style.top = `${Math.round(visualBottom - stageRect.top - infoStack.offsetHeight - 4)}px`;
+        };
+        this._positionChargeInfo = positionChargeInfo;
+        if (chargingPhoto && infoStack.parentElement !== carStage) carStage.appendChild(infoStack);
+        else if (!chargingPhoto && infoStack.parentElement !== infoHome) infoHome.appendChild(infoStack);
+        if (chargingPhoto) requestAnimationFrame(positionChargeInfo);
+        else infoStack.style.removeProperty("top");
+      }
       /* Built here rather than in _build so the animation speed can follow
          the car. SMIL will not pick up a changed dur on a running animation,
          so the tier change is a re-render of this one element; it happens
@@ -3171,8 +4378,9 @@
         const ref = (rd && rd.cycle > 0 ? rd.cycle : DRIVE.refCycle) /
                     (scale > 0 ? scale : 1);
         let cyc = 0;
-        if (moving && kph !== 0) {
-          const v = kph === null ? DRIVE.refKph : kph;   /* speed not reported */
+        const forceAnimOnly = this._car.force_drive_anim === true;
+        if (moving && (kph !== 0 || forceAnimOnly)) {
+          const v = kph === null || (kph === 0 && forceAnimOnly) ? DRIVE.refKph : kph;
           cyc = ref * DRIVE.refKph / v;
           cyc = Math.min(DRIVE.maxCycle, Math.max(DRIVE.minCycle, cyc));
           cyc = Math.round(cyc * 100) / 100;
@@ -3189,29 +4397,76 @@
             const cwv = (box && box.length === 4 && box[2] > box[0]) ? box[2] - box[0] : 233 * 0.71;
             const wh = this._wheels(dsrc);
             const wdur = cyc > 0 ? wheelPeriod(wh, cwv, cyc, rd && rd.angle) : 0;
+            const wasHidden = dOvl.style.display === "none";
+            if (wasHidden) dOvl.style.display = "";
+            const cardRect = this.shadowRoot.querySelector("ha-card")?.getBoundingClientRect();
+            const ovlRect = dOvl.getBoundingClientRect();
+            const vb = (dOvl.getAttribute("viewBox") || "-50 0 283 108").split(/\s+/).map(Number);
+            const viewScale = ovlRect.width && vb[2] ? ovlRect.width / vb[2] : 0;
+            const edgeBounds = cardRect && viewScale ? {
+              left: vb[0] + (cardRect.left - ovlRect.left) / viewScale,
+              right: vb[0] + (cardRect.right - ovlRect.left) / viewScale
+            } : null;
+            if (wasHidden) dOvl.style.display = "none";
             dOvl.innerHTML =
-              driveRoad(233, 108, box, rd, cyc > 0 ? +cyc.toFixed(3) : 0) +
+              driveRoad(233, 108, box, rd, cyc > 0 ? +cyc.toFixed(3) : 0, edgeBounds) +
               driveWheels(wh, dsrc, wdur ? +wdur.toFixed(3) : 0);
           }
         }
         dOvl.style.display = moving ? "" : "none";
+        const hL = q("headlights");
+        const flashAllowed = this._flashEffectAllowed();
+        if (!flashAllowed && this._flashUntil) {
+          clearTimeout(this._flashTimer);
+          this._flashTimer = null;
+          this._flashUntil = 0;
+        }
+        const flashActive = flashAllowed && Date.now() < (this._flashUntil || 0);
+        if (hL) hL.style.display = (lightsOn || flashActive) ? "" : "none";
+        const dL = q("daylights");
+        if (dL) dL.style.display = moving ? "" : "none";
+        const restWrap = q("restWrap");
+        if (restWrap) restWrap.classList.toggle("driving", moving);
       }
 
       // on-car states
-      const lockS = this._st("lock");
-      const locked = lockS && lockS.state === "locked";
-      this._setLockIcon(locked);
-      const frunkOpen = this._is("frunk", "open");
-      const trunkOpen = this._is("trunk", "open");
+      const locked = this._is("lock", "locked");
+      const frunkOpen = this._visualFrunkOpen();
+      const trunkOpen = this._visualTrunkOpen();
       if (!this._arm.frunk) {
         const fl = q("frunkLbl");
         if (fl) { fl.textContent = frunkOpen ? "Close" : "Open"; fl.style.fill = frunkOpen ? "#e0a63c" : ""; }
+      }
+      if (!this._arm.rfrunk) {
+        const rfl = q("restFrunkLbl");
+        if (rfl) { rfl.textContent = frunkOpen ? "Close" : "Frunk"; rfl.style.fill = frunkOpen ? "#e0a63c" : ""; }
       }
       if (!this._arm.trunk) {
         const tl = q("trunkLbl");
         if (tl) { tl.textContent = trunkOpen ? "Close" : "Open"; tl.style.fill = trunkOpen ? "#e0a63c" : ""; }
       }
-      const plugged = this._plugged();
+      if (!this._arm.rtrunk) {
+        const rtl = q("restTrunkLbl");
+        if (rtl) { rtl.textContent = trunkOpen ? "Close" : "Trunk"; rtl.style.fill = trunkOpen ? "#e0a63c" : ""; }
+      }
+      const lockBtn = q("aLock");
+      if (lockBtn) {
+        const lockUnlocked = this._is("lock", "unlocked");
+        const lockKnown = locked || lockUnlocked;
+        const lockLabel = locked ? "Locked" : lockUnlocked ? "Unlocked" : "Unavailable";
+        const lockText = lockBtn.querySelector(".lb");
+        if (lockText && !this._arm.mainLock) lockText.textContent = lockLabel;
+        const lockPath = lockBtn.querySelector("svg path");
+        if (lockPath) lockPath.setAttribute("d", ICONS[locked ? "lock" : "unlock"]);
+        lockBtn.classList.toggle("locked", locked);
+        lockBtn.disabled = !lockKnown;
+        if (!this._arm.mainLock) lockBtn.setAttribute("aria-label", lockLabel);
+      }
+      /* Keep the frunk and trunk hotspots on the car; lock is in the centered action bar. */
+      ["restFrunkBtn","restTrunkBtn"].forEach((id) => {
+        const el = q(id); if (el) el.style.display = moving ? "none" : "";
+      });
+      const plugged = this._visualPlugged() && !this._forceDriveAnim();
       const portOpen2 = this._is("charge_port", "open");
       const bolt = q("boltP");
       if (bolt) {
@@ -3223,31 +4478,120 @@
       const flap = q("portFlap");
       if (flap) flap.style.display = plugged || portOpen2 ? "" : "none";
       const se = q("sentryEye");
-      if (se) se.style.display = this._sentryOn() ? "" : "none";
-      const bBolt = q("battBolt");
-      if (bBolt) bBolt.style.display = charging ? "" : "none";
+      if (se) se.style.display = this._is("sentry", "on") ? "" : "none";
       q("battTxt").style.color = charging ? "#4fd07a" : "";
       const bakedC = this._cableBaked();
       const rOvl = q("restChgOvl");
       if (rOvl) {
         /* baked: dashes only, and only while actually charging (plugged-but-idle
            has nothing to animate). Unbaked keeps the drawn cable on both. */
-        rOvl.style.display = (bakedC ? charging
-                                     : (charging || plugged) && this._img("image_charging")) ? "" : "none";
+        rOvl.style.display = moving ? "none" :
+                             ((bakedC ? charging
+                                     : (charging || plugged) && !this._img("image_charging")) ? "" : "none");
         const rc = q("restCable");
         if (rc) rc.setAttribute("stroke", charging ? "#2f7a49" : "#3f6db5");
         const rd = q("restCableDash");
         if (rd) rd.style.display = charging ? "" : "none";
+        const rcg = q("restCableGlow");
+        if (rcg) rcg.style.display = charging ? "" : "none";
+        const rbolt = q("restCableBolt");
+        if (rbolt) {
+          rbolt.style.display = charging ? "" : "none";
+          rbolt.setAttribute("fill", "#4fd07a");
+        }
         const rg = q("restGlow");
         if (rg) rg.style.display = charging ? "" : "none";
       }
       const ri = q("restImg");
       if (ri) {
-        const rsrc = (charging && this._img("image_charging")) ||
+        let rsrc = moving ? this._img("image_side") :
+                     ((charging && this._img("image_charging")) ||
                      (plugged && (this._img("image_side_plugged") || this._img("image_charging"))) ||
-                     this._img("image_side");
-        if (rsrc && !ri.getAttribute("src").endsWith(rsrc)) ri.setAttribute("src", rsrc);
+                     this._img("image_side"));
+        if (rsrc) {
+          ri.dataset.basesrc = rsrc;
+          const fo = this._visualFrunkOpen();
+          const to = this._visualTrunkOpen();
+          if (!this._failedImgs) this._failedImgs = new Set();
+          const openSuffix = fo && to ? "frunktrunkopen" : fo ? "frunkopen" : to ? "trunkopen" : "";
+          const variantFor = (source) => source.replace(/(\.(?:jpe?g|png))(?=([?#]|$))/i, `-${openSuffix}$1`);
+          const openCandidates = [];
+          if (openSuffix && !moving) {
+            const openBases = charging && plugged
+              ? [this._img("image_charging"), this._img("image_side_plugged"), this._img("image_side")]
+              : plugged
+                ? [this._img("image_side_plugged"), this._img("image_charging"), this._img("image_side")]
+                : [this._img("image_side")];
+            for (const base of openBases) {
+              if (!base) continue;
+              const candidate = variantFor(base);
+              if (!openCandidates.includes(candidate)) openCandidates.push(candidate);
+            }
+            ri._openVariantCandidates = openCandidates;
+            const preferred = openCandidates.find((candidate) => !this._failedImgs.has(candidate));
+            if (preferred) rsrc = preferred;
+          } else {
+            ri._openVariantCandidates = [];
+          }
+
+          if (ri.getAttribute("src") !== rsrc) {
+             ri.setAttribute("src", rsrc);
+
+             ri.onload = () => {
+               const wrap = ri.closest(".imgWrap");
+               if (wrap) {
+                 const isOpen = fo || to;
+                 if (isOpen && ri.naturalHeight && ri.naturalHeight > 400) {
+                   const scale = (ri.clientWidth || 280) / 660;
+                   const shift = (ri.naturalHeight - 400) * scale;
+                   wrap.style.transform = `translateY(-${shift}px)`;
+                   wrap.style.marginBottom = `-${shift}px`;
+                 } else {
+                   wrap.style.transform = '';
+                   wrap.style.marginBottom = '';
+                 }
+               }
+               if (this._positionChargeInfo) requestAnimationFrame(this._positionChargeInfo);
+             };
+              ri.onerror = () => {
+                const failedSrc = ri.getAttribute("src");
+                if (this._failedImgs) this._failedImgs.add(failedSrc);
+                const nextVariant = (ri._openVariantCandidates || []).find((candidate) =>
+                  candidate !== failedSrc && !this._failedImgs.has(candidate));
+                if (nextVariant) ri.setAttribute("src", nextVariant);
+                else if (failedSrc !== ri.dataset.basesrc) ri.setAttribute("src", ri.dataset.basesrc);
+              };
+          } else {
+             /* src unchanged (image cached) — still sync the transform in case
+                the card rebuilt (e.g. unplug event) and lost the inline style */
+             const wrap = ri.closest(".imgWrap");
+             if (wrap) {
+               const isOpen = fo || to;
+               if (!isOpen) {
+                 wrap.style.transform = '';
+                 wrap.style.marginBottom = '';
+               } else if (!wrap.style.transform && ri.naturalHeight > 400) {
+                 const scale = (ri.clientWidth || 280) / 660;
+                 const shift = (ri.naturalHeight - 400) * scale;
+                 wrap.style.transform = `translateY(-${shift}px)`;
+                 wrap.style.marginBottom = `-${shift}px`;
+               }
+             }
+          }
+          /* Sync the imgWrap margin-top so the car body aligns the same
+             way in both plugged and unplugged state. The two source images
+             have the car body starting at different Y positions:
+               side-plugged.jpg: car top at y≈41 (more space at top)
+               side.jpg:         car top at y≈18 (less space at top)
+             Unplugged needs ~17px LESS upward pull to keep the visible car body
+             at the same height as the plugged view. */
+          const wrap2 = ri.closest(".imgWrap");
+          if (wrap2 && !fo && !to) {
+            wrap2.style.marginTop = plugged ? "" : "-58px";
+          }
+        }
       }
+      this._positionRestFrunkHit();
       const ti = q("topImg");
       if (ti) {
         const tsrc = (charging && this._img("image_top_charging")) ||
@@ -3257,6 +4601,10 @@
       }
       const bpulse = q("boltPulse");
       if (bpulse) bpulse.style.display = charging ? "" : "none";
+      const previewPlugged = this._car.force_plugged === true;
+      ["aPort", "cLim", "ampUp", "ampDn", "btnStopChg", "btnUnlockPort"].forEach((id) => {
+        const el = q(id); if (el) el.disabled = previewPlugged;
+      });
       const cBtns = q("chgBtns");
       if (cBtns) {
         const portOpen = this._is("charge_port", "open");
@@ -3266,12 +4614,14 @@
         if (stopB2) stopB2.style.display = charging ? "" : "none";
         if (portB2) {
           portB2.style.gridColumn = charging ? "" : "1 / -1";
-          if (!charging && !plugged && portOpen) {
-            portB2.textContent = "Close Charge Port";
-            portB2.dataset.mode = "close";
-          } else {
-            portB2.textContent = "Unlock Charge Port";
-            portB2.dataset.mode = "unlock";
+          if (!this._arm.unlockChargePort && !this._arm.closeChargePort) {
+            if (!charging && !plugged && portOpen) {
+              portB2.textContent = "Close Charge Port";
+              portB2.dataset.mode = "close";
+            } else {
+              portB2.textContent = "Unlock Charge Port";
+              portB2.dataset.mode = "unlock";
+            }
           }
         }
       }
@@ -3293,46 +4643,31 @@
       // action row states
       const vent = q("aVent");
       if (vent && !this._arm.vent) vent.classList.toggle("on", this._is("windows_cover", "open"));
-      const sen = q("aSentry");
-      if (sen) {
-        sen.style.display = this._st("sentry") ? "" : "none";
-        const why = this._sentryBlocked();
-        sen.classList.toggle("blocked", !!why);
-        sen.title = why === "driving" ? "Tesla does not allow Sentry while driving"
-                  : why ? "Sentry is unavailable right now" : "";
-        if (why) {
-          sen.classList.remove("on");
-          const lb = sen.querySelector(".lb");
-          if (lb && !this._sentryWhyT) lb.textContent = why === "driving" ? "Driving" : "Unavailable";
-        } else if (!this._arm.sentry) {
-          sen.classList.toggle("on", this._sentryOn());
-          /* say what is happening until the car confirms it */
-          const want = this._pendVal("sentry");
-          const lb = sen.querySelector(".lb");
-          if (lb) lb.textContent = want === undefined ? "Sentry" : want ? "Enabling" : "Disabling";
-        }
-      }
+      const sentryBtn = q("aSentry");
+      if (sentryBtn) sentryBtn.classList.toggle("on", this._is("sentry", "on"));
 
       // climate row
       const climS = this._st("climate");
       const climOn = this._climOn();
       const inT = this._num("inside_temp");
       const outT = this._num("outside_temp");
-      q("climSub").textContent =
-        (climOn ? "On · " : "") +
+      const climateSummary =
         (inT === null ? "" : "Interior " + Math.round(inT) + "°") +
         (outT === null ? "" : (inT === null ? "" : " · ") + "Exterior " + Math.round(outT) + "°");
+      q("climSub").textContent = (climOn ? "On" : "Off") + (climateSummary ? " · " + climateSummary : "");
+      const climFan = q("headClim") && q("headClim").querySelector(".climFan");
+      if (climFan) climFan.classList.toggle("spin", !!climOn);
       const pwr = q("climPwr");
       if (pwr) {
         pwr.classList.toggle("on", !!climOn);
         q("climPwrLb").textContent = climOn ? "On" : "Off";
       }
       const tT = q("tTgt");
-      if (tT) tT.textContent = climS && climS.attributes.temperature ? climS.attributes.temperature + "°" : "-";
+      if (tT) tT.innerHTML = climS && climS.attributes.temperature ? climS.attributes.temperature + '<span class="tDeg">°</span>' : "-";
       const ctTemps = q("climTemps");
       if (ctTemps) ctTemps.textContent =
         (inT === null ? "" : "Interior " + Math.round(inT) + "°C") +
-        (outT === null ? "" : (inT === null ? "" : "  ·  ") + "Exterior " + Math.round(outT) + "°C") || "-";
+        (outT === null ? "" : (inT === null ? "" : "\n") + "Exterior " + Math.round(outT) + "°C") || "-";
       const cVent = q("climVent");
       if (cVent) cVent.classList.toggle("on", this._is("windows_cover", "open"));
       const hideSeats = (this._car.hide_seats || []).map((x) => String(x).toLowerCase());
@@ -3412,23 +4747,26 @@
       const haze = q("climHaze");
       /* the app does not draw vent mist while defrost is running */
       if (haze) haze.style.display = climOn && !dfOn ? "" : "none";
-      /* A baked photo already shows its own cable, so the climate view does what
-         the Controls view does: a pulsing bolt at the port and nothing drawn.
-         Before this it drew a second cable, at a default anchor calibrated for
-         a different pack, floating clear of the car. */
-      const cbp = q("climBoltPulse");
-      if (cbp) cbp.style.display = charging ? "" : "none";
+      /* The climate image is an interior view, so the exterior cable is always
+         drawn as an overlay. Plug state shows the cable; charging animates its dash. */
+      this._positionClimateLayout();
+      this._updateClimateCable();
       const ccg = q("climCableG");
+      const liveCable = q("climCableLiveGroup");
       if (ccg) {
         ccg.style.display = plugged ? "" : "none";
-        const cc = q("climCable");
+        if (liveCable) liveCable.style.display = plugged ? "" : "none";
+        const cc = q("climCableLive");
         if (cc) cc.setAttribute("stroke", charging ? "#2f7a49" : "#3f6db5");
-        const ccd = q("climCableDash");
+        const ccd = q("climCableDashLive");
         if (ccd) ccd.style.display = charging ? "" : "none";
         const cg = q("climGlow");
         if (cg) cg.setAttribute("fill", charging ? "#4fd07a" : plugged ? "#d53a3a" : "#6f6f6f");
         const cb = q("climBolt");
-        if (cb) cb.setAttribute("fill", charging ? "#4fd07a" : "#cfd2d5");
+        if (cb) {
+          cb.setAttribute("fill", charging ? "#4fd07a" : "#cfd2d5");
+          cb.style.display = charging ? "" : "none";
+        }
       }
       const pendVal = (p) => p && Date.now() - p.ts < 20000 ? p.val : null;
       const curPreset = String(pendVal(this._pendPreset) || (climS && climS.attributes.preset_mode) || "").toLowerCase();
@@ -3488,11 +4826,7 @@
       const ap = q("aPort");
       if (ap) ap.classList.toggle("on", this._is("charge_port", "open") || plugged);
 
-      // location row
-      const locS = this._st("location");
-      q("locSub").textContent = locS
-        ? (locS.state === "home" ? "Home" : locS.state === "not_home" ? "Away" : locS.state)
-        : "-";
+      // location row removed
 
       // footer
       const odo = this._num("odometer");
@@ -3514,7 +4848,7 @@
       }
       const yr = this._year();
       const vin = this._vin();
-      const ident = (yr ? yr + " " : "") + (this._car.model || "");
+      const ident = yr ? String(yr) : "";
       const bits = [];
       if (ident.trim()) bits.push(ident.trim());
       if (odo !== null) bits.push(Math.round(odo).toLocaleString() + " " + this._unit("odometer", "km"));
@@ -3525,6 +4859,7 @@
       const lu = this._st("last_update");
       const rel = lu ? relDur(lu.state) : "";
       q("upd").textContent = rel ? (rel === "just now" ? "Updated just now" : "Updated " + rel + " ago") : "";
+
     }
   }
 
