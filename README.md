@@ -51,7 +51,7 @@ Copy the contents of this repository's dist/ folder into a folder such as
 /config/www/sexy-home-assistant-tesla-card/. Add the resource
 /local/sexy-home-assistant-tesla-card/sexy-home-assistant-tesla-card.js with type
 module. The images can then be referenced under
-/local/sexy-home-assistant-tesla-card/images/. After replacing the JavaScript
+/local/sexy-home-assistant-tesla-card/images/. To use a local pack, set the car images option to /local/sexy-home-assistant-tesla-card/images/models/y/white/app/ (use the matching model/paint folder). After replacing the JavaScript
 file, refresh the browser; if it is cached, add or change a ?v= query value on
 the resource URL.
 
