@@ -5050,7 +5050,7 @@
   window.customCards = window.customCards || [];
   window.customCards.push({
     type: "tesla-fleet-card",
-    name: "Tesla Fleet Card",
+    name: "Sexy Tesla Card",
     description: "Tesla-app-style card for tesla_custom & tesla_fleet - multi-car, one-click switching",
     preview: true,
   });

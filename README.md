@@ -1,21 +1,35 @@
-# Sexy Home Assistant Tesla Card
+# Sexy Tesla Card
 
-<img src="https://raw.githubusercontent.com/borgqueenx/sexy-home-assistant-tesla-card/main/docs/spaceship-header.png" alt="A badly drawn car that came out as a spaceship" width="900">
+A Tesla-app-style Home Assistant dashboard card for your whole fleet. It brings vehicle state, charging, climate, lock controls, and driving visuals together in one responsive card.
 
-**A personal fork of [MrNickIE/tesla-fleet-homeassistant](https://github.com/MrNickIE/tesla-fleet-homeassistant), customized as a Tesla-app-style Home Assistant dashboard card.** One card shows your
-whole fleet - battery, range, charging, climate, locks, location - looking and
-behaving like the official Tesla app, and switching between cars in one click.
+Works with [tesla_custom](https://github.com/alandtse/tesla), the official **tesla_fleet** integration, and [Teslemetry](https://teslemetry.com/).
 
-Works with **all** Tesla integrations, automatically:
-[tesla_custom](https://github.com/alandtse/tesla) (HACS), the official
-**tesla_fleet** integration, **and** [Teslemetry](https://teslemetry.com/).
+## The good stuff
 
-> ⚡ The upstream card and this fork were built conversationally with AI, using screenshots and screen recordings of the Tesla app as references.
-> The original author is credited below; this fork adds the layout, card behavior, and image assets used in this Home Assistant setup.
+- **Light-aware headlights:** set a Home Assistant lux sensor and a threshold. While the car is driving, the card illuminates the headlights when ambient light falls below that level.
+- **Speed-reactive driving:** show the car's speed and animate its wheels and road markings in step with the reported vehicle speed.
+- **Frunk, trunk, and lock controls:** open the frunk or trunk and lock or unlock the car from the card, with a second tap to confirm the action.
+- **Animated Tesla-style views:** car images, charging cable and power flow, headlights, and transitions bring the Home, Climate, and Charging views to life.
+- **Climate and charging controls:** adjust cabin temperature, seats, and ventilation; use supported Defrost, Camp, Pet, and Cabin Overheat Protection controls; and review charge limits and live charging details.
+- **One card for multiple vehicles:** switch between cars and use supported states from your Tesla integration without building a separate card for every screen.
 
-| Home | Charging | Controls | Climate |
-| --- | --- | --- | --- |
-| ![Home view](docs/screenshots/1-home.png) | ![Charging](docs/screenshots/2-home-charging.png) | ![Controls view](docs/screenshots/3-controls.png) | ![Climate view](docs/screenshots/4-climate.png) |
+## See it in motion
+
+These demos are animated GIFs made from the supplied screen recordings. They loop in GitHub; GitHub follows the viewer's animated-image accessibility setting.
+
+| Card demo 1 | Card demo 2 |
+| --- | --- |
+| ![Sexy Tesla Card demo 1, looping screen recording](docs/demos/tesla-card-demo-1.gif) | ![Sexy Tesla Card demo 2, looping screen recording](docs/demos/tesla-card-demo-2.gif) |
+
+## Screenshots
+
+| Home menu | Climate menu |
+| --- | --- |
+| ![Main menu showing frunk, trunk, lock, and vehicle controls](docs/screenshots/home-menu.png) | ![Climate menu showing interior, climate modes, and temperature controls](docs/screenshots/climate-menu.png) |
+
+| Charging panel | Driving, headlights, and speed |
+| --- | --- |
+| ![Charging details and charge limit controls](docs/screenshots/charging-panel.png) | ![Driving view showing speed and low-light headlight effects](docs/screenshots/driving-lights-speed.png) |
 
 ---
 
@@ -26,7 +40,7 @@ This is a custom HACS Dashboard repository. HACS must already be installed in Ho
 1. Open HACS and select the three-dot menu.
 2. Choose Custom repositories.
 3. Add https://github.com/borgqueenx/sexy-home-assistant-tesla-card and select Dashboard as the category.
-4. Add the repository, open Sexy Home Assistant Tesla Card in HACS, and download it.
+4. Add the repository, open Sexy Tesla Card in HACS, and download it.
 5. Refresh the Home Assistant dashboard in your browser or Companion app.
 
 HACS installs the card and its bundled image packs together. The files are stored under
@@ -57,7 +71,7 @@ the resource URL.
 
 ## Quick start
 
-1. Edit your dashboard → **Add card** → search **Tesla Fleet Card**.
+1. Edit your dashboard → **Add card** → search **Sexy Tesla Card**.
 2. Fill in the four fields:
    - **Name** - whatever you call the car.
    - **Model** - Model 3 or Model Y (picks the built-in artwork).
