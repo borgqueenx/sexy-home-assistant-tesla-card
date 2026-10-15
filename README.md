@@ -23,6 +23,8 @@ These demos are animated GIFs made from the supplied screen recordings. They loo
 
 ## Screenshots
 
+Note that the screenshots that show a lock button, show a feature that has been removed from the card. there is now a lock button in the icon menu instead of on the tesla car, to keep things clean.
+
 | Home menu | Climate menu |
 | --- | --- |
 | ![Main menu showing frunk, trunk, lock, and vehicle controls](docs/screenshots/home-menu.png) | ![Climate menu showing interior, climate modes, and temperature controls](docs/screenshots/climate-menu.png) |
