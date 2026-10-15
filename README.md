@@ -15,15 +15,14 @@ Works with [tesla_custom](https://github.com/alandtse/tesla), the official **tes
 
 ## See it in motion
 
-These demos are animated GIFs made from the supplied screen recordings. They loop in GitHub; GitHub follows the viewer's animated-image accessibility setting.
+These demos are animated GIFs made from the supplied screen recordings. 
+Note that these videos show a lock button, a feature that has been removed from the card. there is now a lock button in the icon menu instead of on the tesla car, to keep things clean. See screenshots below.
 
 | Card demo 1 | Card demo 2 |
 | --- | --- |
 | ![Sexy Tesla Card demo 1, looping screen recording](docs/demos/tesla-card-demo-1.gif) | ![Sexy Tesla Card demo 2, looping screen recording](docs/demos/tesla-card-demo-2.gif) |
 
 ## Screenshots
-
-Note that the screenshots that show a lock button, show a feature that has been removed from the card. there is now a lock button in the icon menu instead of on the tesla car, to keep things clean.
 
 | Home menu | Climate menu |
 | --- | --- |
