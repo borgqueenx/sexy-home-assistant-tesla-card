@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.24";
+  const CARD_VERSION = "1.1.25";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -2328,7 +2328,7 @@
     background:#000000cc; color:#ffd47f; font-size:11px; padding:3px 9px; border-radius:8px; }
   .tapa.armed text.olbl { fill:#e0a63c !important; }
 
-  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px -20px 4px; overflow:visible; }
+  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px -10px 4px; overflow:visible; }
   .abtn { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; width:100%;
     background:none; border:none; cursor:pointer; color:#a8a8a8; font-size:10.5px;
     font-family:inherit; padding:6px 1px; border-radius:10px; white-space:nowrap; }
