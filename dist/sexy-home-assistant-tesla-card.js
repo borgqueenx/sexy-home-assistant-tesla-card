@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.25";
+  const CARD_VERSION = "1.1.26";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -2328,7 +2328,7 @@
     background:#000000cc; color:#ffd47f; font-size:11px; padding:3px 9px; border-radius:8px; }
   .tapa.armed text.olbl { fill:#e0a63c !important; }
 
-  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px -10px 4px; overflow:visible; }
+  .acts { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); justify-items:center; margin:2px 12px 4px; overflow:visible; }
   .abtn { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; width:100%;
     background:none; border:none; cursor:pointer; color:#a8a8a8; font-size:10.5px;
     font-family:inherit; padding:6px 1px; border-radius:10px; white-space:nowrap; }
@@ -2430,10 +2430,8 @@
   <div class="acts">
     <button class="abtn" id="aFlash">${svgIcon(ICONS.flash)}<span class="lb">Flash</span></button>
     <button class="abtn" id="aHonk">${svgIcon(ICONS.horn)}<span class="lb">Honk</span></button>
-    <button class="abtn" id="aPort">${svgIcon(ICONS.plug)}<span class="lb">Port</span></button>
     <button class="abtn" id="aLock" aria-label="Lock status">${svgIcon(ICONS.lock)}<span class="lb">Unavailable</span></button>
     <button class="abtn" id="aStart">${svgIcon(ICONS.power)}<span class="lb">Start</span></button>
-    <button class="abtn" id="aVent">${svgIcon(ICONS.vent)}<span class="lb">Vent</span></button>
     <button class="abtn" id="aSentry">${svgIcon(ICONS.sentry)}<span class="lb">Sentry</span></button>
   </div>
 
@@ -2572,12 +2570,6 @@
       });
       q("aStart").addEventListener("click", () => {
         if (this._confirm("start", q("aStart"), "Start")) this._call("button", "press", { entity_id: this._car._entities.remote_start });
-      });
-      q("aVent").addEventListener("click", () => {
-        if (this._confirm("vent", q("aVent"), "Vent")) this._setWindowsVent();
-      });
-      q("aPort").addEventListener("click", () => {
-        if (this._confirm("port", q("aPort"), "Port")) this._toggleCover("charge_port");
       });
       q("aSentry").addEventListener("click", () => {
         if (!this._confirm("sentry", q("aSentry"), "Sentry")) return;
@@ -4616,7 +4608,7 @@
       const bpulse = q("boltPulse");
       if (bpulse) bpulse.style.display = charging ? "" : "none";
       const previewPlugged = this._car.force_plugged === true;
-      ["aPort", "cLim", "ampUp", "ampDn", "btnStopChg", "btnUnlockPort"].forEach((id) => {
+      ["cLim", "ampUp", "ampDn", "btnStopChg", "btnUnlockPort"].forEach((id) => {
         const el = q(id); if (el) el.disabled = previewPlugged;
       });
       const cBtns = q("chgBtns");
@@ -4655,8 +4647,6 @@
       }
 
       // action row states
-      const vent = q("aVent");
-      if (vent && !this._arm.vent) vent.classList.toggle("on", this._is("windows_cover", "open"));
       const sentryBtn = q("aSentry");
       if (sentryBtn) sentryBtn.classList.toggle("on", this._is("sentry", "on"));
 
@@ -4837,9 +4827,6 @@
         cbl.setAttribute("stroke", charging ? "#4fd07a" : "#4a9eff");
         cbl.setAttribute("stroke-dasharray", charging ? "10 8" : "");
       }
-      const ap = q("aPort");
-      if (ap) ap.classList.toggle("on", this._is("charge_port", "open") || plugged);
-
       // location row removed
 
       // footer
