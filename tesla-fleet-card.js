@@ -2143,6 +2143,7 @@
     font-family:-apple-system,'Segoe UI',Roboto,sans-serif; color:#ececec; -webkit-text-size-adjust:100%; text-size-adjust:100%; }
   .snapLayer, .snapLayer * { pointer-events:none !important; }
   .snapLayer.carSnapLayer { z-index:10; }
+  .snapLayer.cableSnapLayer { z-index:8; }
   @keyframes teslaAwayLowerLeft {
     0% { transform:translate3d(0,0,0) scale(1); opacity:1; }
     38% { transform:translate3d(-9%,7%,0) scale(1.025); opacity:1; }
@@ -2327,11 +2328,12 @@
     background:#000000cc; color:#ffd47f; font-size:11px; padding:3px 9px; border-radius:8px; }
   .tapa.armed text.olbl { fill:#e0a63c !important; }
 
-  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px 8px 4px; }
+  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px 12px 4px; overflow:visible; }
   .abtn { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; width:100%;
     background:none; border:none; cursor:pointer; color:#a8a8a8; font-size:10.5px;
     font-family:inherit; padding:6px 1px; border-radius:10px; white-space:nowrap; }
   .abtn svg { width:22px; height:22px; fill:#d9d9d9; }
+  #aLock svg { width:26px; height:26px; margin-top:-4px; }
   .abtn:active { background:#242424; }
   .abtn.armed { color:#e0a63c; } .abtn.armed svg { fill:#e0a63c; }
   .abtn.on svg { fill:#4fa3ff; } .abtn.on { color:#4fa3ff; }
@@ -3601,6 +3603,7 @@
         }
       }
       const layer = document.createElement("div");
+      let cableLayer = null;
       layer.className = "snapLayer carSnapLayer";
       if (car) {
         layer.appendChild(car);
@@ -3610,9 +3613,11 @@
             cable.classList.remove("transitionSnapshot", "carDepart", "fromClimate");
             cable.classList.add("transitionFadeLive");
             Object.assign(cable.style, {
-              right: "auto", bottom: "auto", zIndex: "21", transform: "none", background: "transparent"
+              right: "auto", bottom: "auto", zIndex: "8", transform: "none", background: "transparent"
             });
-            layer.appendChild(cable);
+            cableLayer = document.createElement("div");
+            cableLayer.className = "snapLayer cableSnapLayer";
+            cableLayer.appendChild(cable);
           }
         }
       }
@@ -3643,12 +3648,14 @@
       const token = (this._climateTransitionToken || 0) + 1;
       this._climateTransitionToken = token;
       this.shadowRoot.appendChild(layer);
+      if (cableLayer) this.shadowRoot.appendChild(cableLayer);
 
       this._climateDriveTimer = window.setTimeout(() => {
         if (token !== this._climateTransitionToken || !this.shadowRoot) return;
         if (this._climateCableFrame) cancelAnimationFrame(this._climateCableFrame);
         this._climateCableFrame = null;
         layer.remove();
+        if (cableLayer) cableLayer.remove();
 
         if (enteringClimate && chargeRowWasOpen) {
           const chargeRow = this.shadowRoot.querySelector("#rowChg");
