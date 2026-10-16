@@ -8,7 +8,7 @@
 (function () {
   "use strict";
 
-  const CARD_VERSION = "1.1.23";
+  const CARD_VERSION = "1.1.24";
 
   const PATTERNS = {
     battery: "sensor.{p}battery",
@@ -2328,7 +2328,7 @@
     background:#000000cc; color:#ffd47f; font-size:11px; padding:3px 9px; border-radius:8px; }
   .tapa.armed text.olbl { fill:#e0a63c !important; }
 
-  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px 0 4px; overflow:visible; }
+  .acts { display:grid; grid-template-columns:repeat(7,minmax(0,1fr)); justify-items:center; margin:2px -20px 4px; overflow:visible; }
   .abtn { display:flex; flex-direction:column; align-items:center; gap:5px; min-width:0; width:100%;
     background:none; border:none; cursor:pointer; color:#a8a8a8; font-size:10.5px;
     font-family:inherit; padding:6px 1px; border-radius:10px; white-space:nowrap; }
@@ -2337,6 +2337,7 @@
   .abtn:active { background:#242424; }
   .abtn.on svg { fill:#4fa3ff; } .abtn.on { color:#4fa3ff; }
   .abtn.locked { color:#90c99a; } .abtn.locked svg { fill:#90c99a; }
+  .abtn.unlocked { color:#e68b8b; } .abtn.unlocked svg { fill:#e68b8b; }
   .abtn.armed { color:#e0a63c; } .abtn.armed svg { fill:#e0a63c; }
   #aLock.unlock-confirm { color:#e05252; }
   #aLock.unlock-confirm svg { fill:#e05252; }
@@ -4471,6 +4472,7 @@
         const lockPath = lockBtn.querySelector("svg path");
         if (lockPath) lockPath.setAttribute("d", ICONS[locked ? "lock" : "unlock"]);
         lockBtn.classList.toggle("locked", locked);
+        lockBtn.classList.toggle("unlocked", lockUnlocked);
         lockBtn.disabled = !lockKnown;
         if (!this._arm.mainLock) lockBtn.setAttribute("aria-label", lockLabel);
       }
